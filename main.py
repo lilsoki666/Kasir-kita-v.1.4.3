@@ -1,4 +1,4 @@
-__version__ = "1.4.1-printer-pro"
+__version__ = "2.0.0-professional"
 
 import csv
 import os
@@ -349,30 +349,31 @@ KV = """
     ScreenManager:
         id: sm
 
+
         Screen:
             name: "dashboard"
             ScrollView:
                 do_scroll_x: False
                 BoxLayout:
                     orientation: "vertical"
-                    padding: dp(16)
-                    spacing: dp(12)
+                    padding: dp(14)
+                    spacing: dp(10)
                     size_hint_y: None
                     height: self.minimum_height
 
                     TitleLabel:
-                        text: "Ringkasan Hari Ini"
+                        text: "Dashboard"
 
                     GridLayout:
                         cols: 2
-                        spacing: dp(10)
+                        spacing: dp(8)
                         size_hint_y: None
-                        height: dp(160)
+                        height: dp(170)
 
                         CardBox:
                             orientation: "vertical"
                             Label:
-                                text: "PENJUALAN"
+                                text: "PENJUALAN HARI INI"
                                 font_size: "10sp"
                                 bold: True
                                 color: .10, .50, .30, 1
@@ -391,7 +392,7 @@ KV = """
                         CardBox:
                             orientation: "vertical"
                             Label:
-                                text: "TRANSAKSI"
+                                text: "TRANSAKSI HARI INI"
                                 font_size: "10sp"
                                 bold: True
                                 color: .15, .40, .70, 1
@@ -445,27 +446,148 @@ KV = """
                                 valign: "middle"
                                 text_size: self.size
 
-                    Label:
-                        id: dash_profit
-                        text: "Laba kotor hari ini: Rp 0"
-                        font_size: "12sp"
-                        bold: True
-                        color: .08, .42, .24, 1
+                    CardBox:
                         size_hint_y: None
-                        height: dp(32)
-                        halign: "left"
-                        text_size: self.size
+                        height: dp(64)
+                        orientation: "vertical"
+                        Label:
+                            id: dash_profit
+                            text: "Laba kotor hari ini: Rp 0"
+                            font_size: "12sp"
+                            bold: True
+                            color: .08, .42, .24, 1
+                            halign: "left"
+                            valign: "middle"
+                            text_size: self.size
+
+                    SectionLabel:
+                        text: "Ringkasan Penjualan"
+
+                    GridLayout:
+                        cols: 3
+                        spacing: dp(8)
+                        size_hint_y: None
+                        height: dp(76)
+
+                        CardBox:
+                            orientation: "vertical"
+                            Label:
+                                text: "7 HARI"
+                                font_size: "9sp"
+                                bold: True
+                                color: .35, .40, .48, 1
+                                text_size: self.size
+                            Label:
+                                id: dash_7d_sales
+                                text: "Rp 0"
+                                font_size: "12sp"
+                                bold: True
+                                color: .10, .14, .20, 1
+                                text_size: self.size
+
+                        CardBox:
+                            orientation: "vertical"
+                            Label:
+                                text: "30 HARI"
+                                font_size: "9sp"
+                                bold: True
+                                color: .35, .40, .48, 1
+                                text_size: self.size
+                            Label:
+                                id: dash_30d_sales
+                                text: "Rp 0"
+                                font_size: "12sp"
+                                bold: True
+                                color: .10, .14, .20, 1
+                                text_size: self.size
+
+                        CardBox:
+                            orientation: "vertical"
+                            Label:
+                                text: "ITEM TERJUAL"
+                                font_size: "9sp"
+                                bold: True
+                                color: .35, .40, .48, 1
+                                text_size: self.size
+                            Label:
+                                id: dash_30d_items
+                                text: "0"
+                                font_size: "12sp"
+                                bold: True
+                                color: .10, .14, .20, 1
+                                text_size: self.size
+
+                    SectionLabel:
+                        text: "Produk Terlaris"
+
+                    GridLayout:
+                        id: dash_top_products
+                        cols: 1
+                        spacing: dp(4)
+                        size_hint_y: None
+                        height: self.minimum_height
+
+                    SectionLabel:
+                        text: "Stok Perlu Perhatian"
+
+                    GridLayout:
+                        id: dash_low_stock
+                        cols: 1
+                        spacing: dp(4)
+                        size_hint_y: None
+                        height: self.minimum_height
+
+                    SectionLabel:
+                        text: "Pembayaran Hari Ini"
+
+                    GridLayout:
+                        id: dash_payments
+                        cols: 1
+                        spacing: dp(4)
+                        size_hint_y: None
+                        height: self.minimum_height
+
+                    SectionLabel:
+                        text: "Transaksi Terbaru"
+
+                    GridLayout:
+                        id: dash_recent_sales
+                        cols: 1
+                        spacing: dp(4)
+                        size_hint_y: None
+                        height: self.minimum_height
+
+                    GridLayout:
+                        cols: 2
+                        spacing: dp(8)
+                        size_hint_y: None
+                        height: dp(92)
+
+                        Button:
+                            text: "BUKA KASIR"
+                            background_normal: ""
+                            background_color: .04, .58, .30, 1
+                            color: 1, 1, 1, 1
+                            bold: True
+                            on_release: app.show_screen("pos")
+
+                        Button:
+                            text: "KELOLA PRODUK"
+                            background_normal: ""
+                            background_color: .12, .16, .22, 1
+                            color: 1, 1, 1, 1
+                            bold: True
+                            on_release: app.show_screen("products")
 
                     Button:
-                        text: "Refresh Data"
+                        text: "Refresh Dashboard"
                         size_hint_y: None
                         height: dp(42)
                         background_normal: ""
-                        background_color: .12, .16, .22, 1
-                        color: 1, 1, 1, 1
+                        background_color: .88, .91, .95, 1
+                        color: .08, .11, .16, 1
                         bold: True
-                        on_release: app.refresh_all()
-
+                        on_release: app.refresh_dashboard()
         Screen:
             name: "pos"
             BoxLayout:
@@ -998,14 +1120,135 @@ class POSApp(App):
     def money(value):
         return "Rp {:,.0f}".format(float(value)).replace(",", ".")
 
-    def refresh_dashboard(self):
-        s, product_count, low = self.db.summary_today()
-        self.root.ids.dash_sales.text = f"{self.money(s['total'])}"
-        self.root.ids.dash_trx.text = f"{s['transactions']}"
-        self.root.ids.dash_products.text = f"{product_count}"
-        self.root.ids.dash_low.text = f"{low}"
-        self.root.ids.dash_profit.text = f"Laba kotor hari ini: {self.money(s['profit'])}"
 
+    def refresh_dashboard(self):
+        """Refresh the V2 dashboard using only the existing SQLite schema."""
+        try:
+            s, product_count, low = self.db.summary_today()
+            self.root.ids.dash_sales.text = self.money(s["total"])
+            self.root.ids.dash_trx.text = f"{s['transactions']}"
+            self.root.ids.dash_products.text = f"{product_count}"
+            self.root.ids.dash_low.text = f"{low}"
+            self.root.ids.dash_profit.text = f"Laba kotor hari ini: {self.money(s['profit'])}"
+
+            conn = self.db.conn
+
+            period = conn.execute("""
+                SELECT
+                    COALESCE(SUM(CASE WHEN date(created_at) >= date('now','localtime','-6 day')
+                                      THEN total ELSE 0 END),0) AS sales_7d,
+                    COALESCE(SUM(total),0) AS sales_30d
+                FROM sales
+                WHERE date(created_at) >= date('now','localtime','-29 day')
+            """).fetchone()
+            self.root.ids.dash_7d_sales.text = self.money(period["sales_7d"])
+            self.root.ids.dash_30d_sales.text = self.money(period["sales_30d"])
+
+            items = conn.execute("""
+                SELECT COALESCE(SUM(si.qty),0) qty
+                FROM sale_items si
+                JOIN sales s ON s.id=si.sale_id
+                WHERE date(s.created_at) >= date('now','localtime','-29 day')
+            """).fetchone()["qty"]
+            self.root.ids.dash_30d_items.text = f"{float(items):g}"
+
+            # Top products
+            top_box = self.root.ids.dash_top_products
+            top_box.clear_widgets()
+            top = self.db.top_products(30, 5)
+            if not top:
+                top_box.add_widget(Label(
+                    text="Belum ada produk terjual dalam 30 hari.",
+                    size_hint_y=None, height=dp(34),
+                    color=(.35,.40,.48,1), font_size="11sp",
+                    halign="left", text_size=(None, None)
+                ))
+            else:
+                for i, row in enumerate(top, 1):
+                    top_box.add_widget(Label(
+                        text=f"{i}. {row['product_name']}  |  {row['qty']:g} terjual  |  {self.money(row['revenue'])}",
+                        size_hint_y=None, height=dp(34),
+                        color=(.10,.14,.20,1), font_size="11sp",
+                        halign="left", valign="middle",
+                        text_size=(None, None)
+                    ))
+
+            # Low stock list
+            low_box = self.root.ids.dash_low_stock
+            low_box.clear_widgets()
+            low_rows = conn.execute("""
+                SELECT name, stock, min_stock, unit
+                FROM products
+                WHERE active=1 AND stock <= min_stock
+                ORDER BY stock ASC, name
+                LIMIT 8
+            """).fetchall()
+            if not low_rows:
+                low_box.add_widget(Label(
+                    text="Semua stok berada di atas batas minimum.",
+                    size_hint_y=None, height=dp(34),
+                    color=(.08,.42,.24,1), font_size="11sp",
+                    halign="left"
+                ))
+            else:
+                for row in low_rows:
+                    low_box.add_widget(Label(
+                        text=f"[!] {row['name']}  |  Stok {row['stock']:g} {row['unit']}  |  Minimum {row['min_stock']:g}",
+                        size_hint_y=None, height=dp(34),
+                        color=(.60,.25,.05,1), font_size="11sp",
+                        halign="left", valign="middle"
+                    ))
+
+            # Payment summary
+            pay_box = self.root.ids.dash_payments
+            pay_box.clear_widgets()
+            payments = conn.execute("""
+                SELECT payment_method, COUNT(*) transactions,
+                       COALESCE(SUM(total),0) total
+                FROM sales
+                WHERE date(created_at)=date('now','localtime')
+                GROUP BY payment_method
+                ORDER BY total DESC
+            """).fetchall()
+            if not payments:
+                pay_box.add_widget(Label(
+                    text="Belum ada pembayaran hari ini.",
+                    size_hint_y=None, height=dp(34),
+                    color=(.35,.40,.48,1), font_size="11sp",
+                    halign="left"
+                ))
+            else:
+                for row in payments:
+                    pay_box.add_widget(Label(
+                        text=f"{row['payment_method']}  |  {row['transactions']} transaksi  |  {self.money(row['total'])}",
+                        size_hint_y=None, height=dp(34),
+                        color=(.10,.14,.20,1), font_size="11sp",
+                        halign="left", valign="middle"
+                    ))
+
+            # Recent transactions
+            recent_box = self.root.ids.dash_recent_sales
+            recent_box.clear_widgets()
+            recent = self.db.sales(5)
+            if not recent:
+                recent_box.add_widget(Label(
+                    text="Belum ada transaksi.",
+                    size_hint_y=None, height=dp(34),
+                    color=(.35,.40,.48,1), font_size="11sp",
+                    halign="left"
+                ))
+            else:
+                for row in recent:
+                    when = str(row["created_at"]).replace("T", " ")[:16]
+                    recent_box.add_widget(Label(
+                        text=f"{when}  |  {row['invoice']}  |  {row['payment_method']}  |  {self.money(row['total'])}",
+                        size_hint_y=None, height=dp(36),
+                        color=(.10,.14,.20,1), font_size="10sp",
+                        halign="left", valign="middle"
+                    ))
+        except Exception:
+            # Keep the existing app usable even if an optional dashboard query fails.
+            self.log_startup_error()
     def refresh_pos_categories(self):
         if not hasattr(self, "root") or not self.root:
             return
