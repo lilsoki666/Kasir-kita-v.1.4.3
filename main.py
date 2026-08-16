@@ -1162,14 +1162,26 @@ class POSApp(App):
         pay_row.add_widget(pay_lbl)
         pay_row.add_widget(self.paid_input)
 
-        quick_row = BoxLayout(size_hint_y=None, height=dp(38), spacing=dp(6))
-        quick_row.add_widget(Label(text="Cepat:", size_hint_x=None, width=dp(48), font_size="11sp", color=(0.30,0.34,0.40,1)))
+        # Nominal cepat dibuat responsif agar tidak keluar dari lebar popup
+        # pada HP kecil. Tombol disusun 2x2, bukan 4 tombol dengan lebar tetap.
+        quick_row = BoxLayout(size_hint_y=None, height=dp(74), spacing=dp(6))
+        quick_label = Label(
+            text="Cepat:", size_hint_x=None, width=dp(48), font_size="11sp",
+            color=(0.30, 0.34, 0.40, 1), halign="left", valign="middle"
+        )
+        quick_label.bind(size=lambda instance, value: setattr(instance, 'text_size', value))
+        quick_row.add_widget(quick_label)
+
+        quick_grid = GridLayout(cols=2, rows=2, spacing=dp(5), size_hint_x=1)
         for amount in (10000, 20000, 50000, 100000):
-            qb = Button(text=self.money(amount), font_size="10sp", size_hint_x=None, width=dp(72),
-                        background_normal="", background_color=(0.92,0.94,0.97,1),
-                        color=(0.08,0.12,0.18,1), bold=True)
+            qb = Button(
+                text=self.money(amount), font_size="10sp", size_hint_x=1, size_hint_y=1,
+                background_normal="", background_color=(0.92,0.94,0.97,1),
+                color=(0.08,0.12,0.18,1), bold=True
+            )
             qb.bind(on_release=lambda btn, val=amount: self.set_quick_payment(val))
-            quick_row.add_widget(qb)
+            quick_grid.add_widget(qb)
+        quick_row.add_widget(quick_grid)
 
         self.popup_change_label = Label(
             text="Kembalian: Rp 0",
@@ -1185,7 +1197,7 @@ class POSApp(App):
         )
         btn_pay.bind(on_release=lambda instance: self.checkout())
 
-        checkout_box.height = dp(258)
+        checkout_box.height = dp(294)
         checkout_box.add_widget(self.popup_total_label)
         checkout_box.add_widget(discount_row)
         checkout_box.add_widget(payment_row)
