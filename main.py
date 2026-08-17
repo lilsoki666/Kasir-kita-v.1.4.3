@@ -1,4 +1,4 @@
-__version__ = "4.7.0-interactive"
+__version__ = "4.7.1-universal-category"
 
 import csv
 import os
@@ -823,6 +823,14 @@ KV = """
                         color: .08, .11, .16, 1
                         bold: True
                         on_release: app.category_form()
+
+                    Button:
+                        text: "Kelola Kategori"
+                        background_normal: ""
+                        background_color: .82, .90, 1, 1
+                        color: .10, .28, .55, 1
+                        bold: True
+                        on_release: app.category_manager_popup()
 
                     Button:
                         text: "Riwayat Stok"
@@ -2362,16 +2370,26 @@ class POSApp(App):
             box.add_widget(t)
 
         categories = self.db.categories()
-        cat_names = [c["name"] for c in categories]
-        current_cat = "Umum"
+        cat_names = [str(c["name"]) for c in categories]
+        current_cat = cat_names[0] if cat_names else ""
         if p and p["category_id"]:
             for c in categories:
                 if c["id"] == p["category_id"]:
                     current_cat = c["name"]
                     break
 
+        category_label = Label(
+            text="Kategori Produk",
+            size_hint_y=None, height=dp(22),
+            halign="left", valign="middle",
+            color=(.20, .24, .30, 1), bold=True, font_size="11sp"
+        )
+        category_label.bind(size=lambda w, v: setattr(w, "text_size", v))
+        box.add_widget(category_label)
+
         cat_spinner = Spinner(
-            text=current_cat, values=cat_names,
+            text=current_cat or "Belum ada kategori",
+            values=cat_names or ["Belum ada kategori"],
             size_hint_y=None, height=dp(40)
         )
         box.add_widget(cat_spinner)
@@ -2382,6 +2400,8 @@ class POSApp(App):
 
         def save_it(*_):
             try:
+                if not categories:
+                    raise ValueError
                 cat = next(c for c in categories if c["name"] == cat_spinner.text)
                 data = {
                     "id": product_id,
@@ -2634,21 +2654,125 @@ class POSApp(App):
 
     def category_form(self):
         box = BoxLayout(orientation="vertical", padding=dp(8), spacing=dp(8))
-        t = TextInput(
-            hint_text="Nama kategori", multiline=False,
-            size_hint_y=None, height=dp(42)
+        Label(
+            text="Buat kategori sesuai jenis usaha Anda.",
+            size_hint_y=None, height=dp(30),
+            halign="left", color=(.35, .40, .48, 1), font_size="11sp"
         )
-        b = Button(text="Simpan", size_hint_y=None, height=dp(44))
+        t = TextInput(
+            hint_text="Contoh: Pakaian, Sparepart, Jasa Servis, Elektronik...",
+            multiline=False, size_hint_y=None, height=dp(42)
+        )
+        b = Button(text="Simpan Kategori", size_hint_y=None, height=dp(44))
         box.add_widget(t)
         box.add_widget(b)
-        popup = WhitePopup(title="Kategori", content=box, size_hint=(.82, None), height=dp(180))
+        popup = WhitePopup(title="Tambah Kategori", content=box, size_hint=(.90, None), height=dp(190))
 
         def save_cat(*_):
-            self.db.add_category(t.text)
-            popup.dismiss()
-            self.refresh_all()
+            name = t.text.strip()
+            if not name or name.lower() == "semua":
+                self.info("Nama kategori tidak boleh kosong atau menggunakan 'Semua'.", "Kategori")
+                return
+            try:
+                before = len(self.db.categories())
+                self.db.add_category(name)
+                after = len(self.db.categories())
+                if after == before:
+                    self.info("Kategori sudah ada.", "Kategori")
+                    return
+                if hasattr(self, "_audit"):
+                    self._audit("ADD_CATEGORY", name)
+                popup.dismiss()
+                self.refresh_all()
+            except Exception:
+                self.info("Kategori gagal ditambahkan.", "Kategori")
 
         b.bind(on_release=save_cat)
+        popup.open()
+
+    def category_manager_popup(self):
+        """Manage category names so the POS stays universal for any UMKM type."""
+        outer = BoxLayout(orientation="vertical", padding=dp(8), spacing=dp(6))
+        outer.add_widget(Label(
+            text="Kategori di bawah ini dipakai sebagai filter POS dan saat membuat produk.",
+            size_hint_y=None, height=dp(34), text_size=(dp(330), None),
+            halign="left", valign="middle", color=(.35, .40, .48, 1), font_size="10sp"
+        ))
+
+        scroll = ScrollView(do_scroll_x=False)
+        grid = GridLayout(cols=1, spacing=dp(6), size_hint_y=None)
+        grid.bind(minimum_height=grid.setter("height"))
+        scroll.add_widget(grid)
+        outer.add_widget(scroll)
+
+        close = Button(text="Tutup", size_hint_y=None, height=dp(42))
+        outer.add_widget(close)
+        popup = WhitePopup(title="Kelola Kategori Usaha", content=outer,
+                           size_hint=(.94, None), height=dp(440))
+        close.bind(on_release=popup.dismiss)
+
+        def rebuild(*_):
+            grid.clear_widgets()
+            categories = self.db.categories()
+            if not categories:
+                grid.add_widget(Label(text="Belum ada kategori.", size_hint_y=None, height=dp(36)))
+                return
+            for cat in categories:
+                row = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(6))
+                name = Label(text=str(cat["name"]), halign="left", valign="middle",
+                             color=(.08,.10,.14,1), font_size="11sp")
+                name.bind(size=lambda w, v: setattr(w, "text_size", v))
+                edit = Button(text="Ubah", size_hint_x=None, width=dp(72),
+                               background_normal="", background_color=(.82,.90,1,1),
+                               color=(.10,.28,.55,1), bold=True)
+                row.add_widget(name)
+                row.add_widget(edit)
+                grid.add_widget(row)
+                edit.bind(on_release=lambda btn, cid=cat["id"], old=str(cat["name"]):
+                          self.rename_category(cid, old, popup, rebuild))
+
+        rebuild()
+        popup.open()
+
+    def rename_category(self, category_id, old_name, manager_popup=None, rebuild_callback=None):
+        box = BoxLayout(orientation="vertical", padding=dp(8), spacing=dp(8))
+        t = TextInput(text=str(old_name), multiline=False, size_hint_y=None, height=dp(42))
+        save = Button(text="Simpan Perubahan", size_hint_y=None, height=dp(44))
+        box.add_widget(t)
+        box.add_widget(save)
+        popup = WhitePopup(title="Ubah Nama Kategori", content=box, size_hint=(.88, None), height=dp(170))
+
+        def do_save(*_):
+            new_name = t.text.strip()
+            if not new_name or new_name.lower() == "semua":
+                self.info("Nama kategori tidak valid.", "Kategori")
+                return
+            if new_name == old_name:
+                popup.dismiss()
+                return
+            try:
+                exists = self.db.conn.execute(
+                    "SELECT id FROM categories WHERE lower(name)=lower(?) AND id<>?",
+                    (new_name, category_id)
+                ).fetchone()
+                if exists:
+                    self.info("Nama kategori tersebut sudah digunakan.", "Kategori")
+                    return
+                self.db.conn.execute(
+                    "UPDATE categories SET name=? WHERE id=?",
+                    (new_name, category_id)
+                )
+                self.db.conn.commit()
+                if hasattr(self, "_audit"):
+                    self._audit("RENAME_CATEGORY", f"{old_name} -> {new_name}")
+                popup.dismiss()
+                if rebuild_callback:
+                    rebuild_callback()
+                self.refresh_all()
+            except Exception as e:
+                self.info(f"Gagal mengubah kategori: {e}", "Kategori")
+
+        save.bind(on_release=do_save)
         popup.open()
 
     def refresh_history(self):
