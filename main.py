@@ -1,4 +1,4 @@
-__version__ = "4.6.0-professional"
+__version__ = "4.7.0-interactive"
 
 import csv
 import os
@@ -296,6 +296,49 @@ KV = """
     valign: "middle"
     text_size: self.size
 
+# --- Interactive V4.7 components ---
+<InteractiveButton@Button>:
+    background_normal: ""
+    background_color: (0.10, 0.15, 0.22, 1) if self.state == "normal" else (0.06, 0.10, 0.16, 1)
+    color: 1, 1, 1, 1
+    bold: True
+    font_size: "12sp"
+
+<StatusChip@Label>:
+    size_hint_y: None
+    height: dp(28)
+    padding: dp(8), 0
+    halign: "center"
+    valign: "middle"
+    text_size: self.size
+    font_size: "10sp"
+    bold: True
+    color: .10, .14, .20, 1
+    canvas.before:
+        Color:
+            rgba: .93, .95, .98, 1
+        RoundedRectangle:
+            pos: self.pos
+            size: self.size
+            radius: [dp(14)]
+
+<QuickCard@Button>:
+    background_normal: ""
+    background_color: (1, 1, 1, 1) if self.state == "normal" else (.94, .96, .99, 1)
+    color: .08, .12, .18, 1
+    bold: True
+    font_size: "11sp"
+    halign: "center"
+    valign: "middle"
+    text_size: self.size
+    canvas.before:
+        Color:
+            rgba: 1, 1, 1, 1
+        RoundedRectangle:
+            pos: self.pos
+            size: self.size
+            radius: [dp(10)]
+
 # --- Style Popup Serba Putih Global ---
 <WhitePopup>:
     background_color: 1, 1, 1, 1
@@ -363,6 +406,28 @@ KV = """
 
                     TitleLabel:
                         text: "Dashboard"
+
+                    CardBox:
+                        size_hint_y: None
+                        height: dp(48)
+                        padding: dp(10), dp(6)
+                        spacing: dp(6)
+                        Label:
+                            text: "Kasir aktif: " + app.cashier_name
+                            font_size: "10sp"
+                            bold: True
+                            color: .10, .14, .20, 1
+                            halign: "left"
+                            valign: "middle"
+                            text_size: self.size
+                        Label:
+                            id: dash_shift_status
+                            text: "Memuat status shift..."
+                            font_size: "10sp"
+                            color: .35, .40, .48, 1
+                            halign: "right"
+                            valign: "middle"
+                            text_size: self.size
 
                     GridLayout:
                         cols: 2
@@ -1198,6 +1263,18 @@ class POSApp(App):
             self.root.ids.dash_products.text = f"{product_count}"
             self.root.ids.dash_low.text = f"{low}"
             self.root.ids.dash_profit.text = f"Laba kotor hari ini: {self.money(s['profit'])}"
+            try:
+                sh = self._active_shift()
+                if sh:
+                    opening, sales, cin, cout = self._cash_summary(sh['id'])
+                    expected = opening + sales + cin - cout
+                    self.root.ids.dash_shift_status.text = f"Shift aktif â€¢ Kas {self.money(expected)}"
+                    self.root.ids.dash_shift_status.color = (.05, .45, .25, 1)
+                else:
+                    self.root.ids.dash_shift_status.text = "Shift belum dibuka"
+                    self.root.ids.dash_shift_status.color = (.65, .35, .05, 1)
+            except Exception:
+                pass
 
             conn = self.db.conn
 
@@ -1949,24 +2026,69 @@ class POSApp(App):
             pass
 
     def business_center_popup(self):
+        """V4.7 interactive business center using the existing V4.6 functions."""
         content = BoxLayout(orientation='vertical', padding=dp(12), spacing=dp(8))
+        user = getattr(self, 'active_user', {'username': self.cashier_name, 'role': 'Kasir'})
+        sh = self._active_shift()
+        header = CardBox(orientation='vertical', size_hint_y=None, height=dp(82), padding=dp(12), spacing=dp(3))
+        header.add_widget(Label(text='Pusat Operasional Toko', size_hint_y=None, height=dp(28),
+                                font_size='16sp', bold=True, color=(.08,.12,.18,1), halign='left'))
+        header.add_widget(Label(text=f"{user.get('username', self.cashier_name)}  â€¢  {user.get('role', 'Kasir')}",
+                                size_hint_y=None, height=dp(20), font_size='11sp', color=(.35,.40,.48,1), halign='left'))
+        if sh:
+            opening, sales, cin, cout = self._cash_summary(sh['id'])
+            expected = opening + sales + cin - cout
+            chip_text = f"SHIFT AKTIF  â€¢  Kas {self.money(expected)}"
+        else:
+            chip_text = "SHIFT BELUM DIBUKA  â€¢  Buka shift sebelum transaksi tunai"
+        chip = StatusChip(text=chip_text)
+        chip.color = (.05,.45,.25,1) if sh else (.65,.35,.05,1)
+        header.add_widget(chip)
+        content.add_widget(header)
+
+        scroll = ScrollView(do_scroll_x=False, bar_width=0)
+        body = BoxLayout(orientation='vertical', spacing=dp(8), size_hint_y=None)
+        body.bind(minimum_height=body.setter('height'))
+        body.add_widget(Label(text='AKSES CEPAT', size_hint_y=None, height=dp(22), font_size='11sp',
+                              bold=True, color=(.35,.40,.48,1), halign='left'))
+        grid = GridLayout(cols=2, spacing=dp(8), size_hint_y=None, height=dp(240))
         actions = [
             ('LOGIN KASIR', self.login_popup),
-            ('SHIFT KAS & TUTUP SHIFT', self.shift_popup),
-            ('KAS MASUK / KAS KELUAR', self.cash_movement_popup),
+            ('SHIFT & KAS', self.shift_popup),
+            ('KAS MASUK / KELUAR', self.cash_movement_popup),
             ('SUPPLIER & PEMBELIAN', self.supplier_popup),
             ('MANAJEMEN USER', self.user_management_popup),
             ('RETUR TRANSAKSI', self.return_popup),
             ('AUDIT LOG', self.audit_popup),
+            ('INVENTORY', self.inventory_popup),
         ]
         for text, fn in actions:
-            b = Button(text=text, size_hint_y=None, height=dp(44), background_normal='',
-                       background_color=(.10,.15,.22,1), color=(1,1,1,1), bold=True)
+            b = QuickCard(text=text, size_hint_y=None, height=dp(54))
             b.bind(on_release=lambda _b, f=fn: (self._close_popup(), f()))
-            content.add_widget(b)
-        content.add_widget(Widget())
-        self._business_popup = WhitePopup(title='V4.6 BUSINESS CENTER', content=content,
-                                          size_hint=(.92, .78), auto_dismiss=True)
+            grid.add_widget(b)
+        body.add_widget(grid)
+        body.add_widget(Label(text='RINGKASAN SHIFT', size_hint_y=None, height=dp(22), font_size='11sp',
+                              bold=True, color=(.35,.40,.48,1), halign='left'))
+        status_card = CardBox(orientation='vertical', size_hint_y=None, height=dp(88), spacing=dp(2))
+        if sh:
+            opening, sales, cin, cout = self._cash_summary(sh['id'])
+            expected = opening + sales + cin - cout
+            lines = [f"Kas awal     {self.money(opening)}", f"Tunai        {self.money(sales)}",
+                     f"Masuk/Keluar {self.money(cin - cout)}", f"Seharusnya   {self.money(expected)}"]
+        else:
+            lines = ['Belum ada shift aktif.', 'Tekan SHIFT & KAS untuk membuka shift.']
+        for line in lines:
+            status_card.add_widget(Label(text=line, size_hint_y=None, height=dp(20), font_size='10sp',
+                                         color=(.10,.14,.20,1), halign='left'))
+        body.add_widget(status_card)
+        scroll.add_widget(body)
+        content.add_widget(scroll)
+        close = Button(text='TUTUP', size_hint_y=None, height=dp(42), background_normal='',
+                       background_color=(.88,.91,.95,1), color=(.08,.11,.16,1), bold=True)
+        content.add_widget(close)
+        self._business_popup = WhitePopup(title='V4.7 BUSINESS CENTER', content=content,
+                                          size_hint=(.94, .86), auto_dismiss=True)
+        close.bind(on_release=self._business_popup.dismiss)
         self._business_popup.open()
 
     def _close_popup(self):
