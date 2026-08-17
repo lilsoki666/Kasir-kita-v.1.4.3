@@ -1,4 +1,4 @@
-__version__ = "3.0.0-professional"
+__version__ = "4.6.0-professional"
 
 import csv
 import os
@@ -595,6 +595,36 @@ KV = """
                             bold: True
                             on_release: app.inventory_popup()
 
+                    GridLayout:
+                        cols: 3
+                        spacing: dp(8)
+                        size_hint_y: None
+                        height: dp(88)
+
+                        Button:
+                            text: "V4 BUSINESS"
+                            background_normal: ""
+                            background_color: .10, .15, .22, 1
+                            color: 1, 1, 1, 1
+                            bold: True
+                            on_release: app.business_center_popup()
+
+                        Button:
+                            text: "SHIFT & KAS"
+                            background_normal: ""
+                            background_color: .45, .25, .70, 1
+                            color: 1, 1, 1, 1
+                            bold: True
+                            on_release: app.shift_popup()
+
+                        Button:
+                            text: "AUDIT"
+                            background_normal: ""
+                            background_color: .35, .42, .48, 1
+                            color: 1, 1, 1, 1
+                            bold: True
+                            on_release: app.audit_popup()
+
                     Button:
                         text: "Refresh Dashboard"
                         size_hint_y: None
@@ -1040,6 +1070,7 @@ class POSApp(App):
     def build(self):
         self.title = "POS Kasir"
         self.db = Database(os.path.join(self.user_data_dir, "pos.db"))
+        self.init_v46_schema()
         self.load_settings()
         self.cart = []
         self.pos_category = "Semua"
@@ -1709,7 +1740,7 @@ class POSApp(App):
         success, msg = self.print_receipt(sample)
         self.info(msg, "Tes Cetak")
 
-    def checkout(self):
+    def _checkout_v3(self):
         if not self.cart:
             self.info("Keranjang masih kosong.")
             return
@@ -1763,6 +1794,399 @@ class POSApp(App):
             f"Kembali: {self.money(change_val)}\n\n"
             f"Status Printer: {print_msg}"
         )
+
+
+    # ==========================================
+    # V4.6 PROFESSIONAL BUSINESS LAYER
+    # ==========================================
+    def init_v46_schema(self):
+        """Create V4.6 business tables without changing the existing schema."""
+        c = self.db.conn.cursor()
+        c.executescript("""
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            username TEXT NOT NULL UNIQUE,
+            pin TEXT NOT NULL,
+            role TEXT NOT NULL DEFAULT 'Kasir',
+            active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS shifts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            opening_cash REAL NOT NULL DEFAULT 0,
+            opened_at TEXT NOT NULL,
+            closing_cash REAL,
+            expected_cash REAL,
+            difference REAL,
+            closed_at TEXT,
+            status TEXT NOT NULL DEFAULT 'OPEN',
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        );
+        CREATE TABLE IF NOT EXISTS cash_movements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            shift_id INTEGER,
+            user_id INTEGER NOT NULL,
+            movement_type TEXT NOT NULL,
+            amount REAL NOT NULL,
+            note TEXT,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(shift_id) REFERENCES shifts(id),
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        );
+        CREATE TABLE IF NOT EXISTS suppliers (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
+            phone TEXT DEFAULT '',
+            address TEXT DEFAULT '',
+            active INTEGER NOT NULL DEFAULT 1,
+            created_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS purchases (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            supplier_id INTEGER,
+            invoice TEXT NOT NULL UNIQUE,
+            total REAL NOT NULL DEFAULT 0,
+            note TEXT DEFAULT '',
+            created_at TEXT NOT NULL,
+            user_id INTEGER,
+            FOREIGN KEY(supplier_id) REFERENCES suppliers(id),
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        );
+        CREATE TABLE IF NOT EXISTS purchase_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            purchase_id INTEGER NOT NULL,
+            product_id INTEGER NOT NULL,
+            qty REAL NOT NULL,
+            cost_price REAL NOT NULL,
+            line_total REAL NOT NULL,
+            FOREIGN KEY(purchase_id) REFERENCES purchases(id) ON DELETE CASCADE,
+            FOREIGN KEY(product_id) REFERENCES products(id)
+        );
+        CREATE TABLE IF NOT EXISTS returns (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sale_id INTEGER NOT NULL,
+            invoice TEXT NOT NULL,
+            amount REAL NOT NULL,
+            reason TEXT DEFAULT '',
+            user_id INTEGER,
+            created_at TEXT NOT NULL,
+            UNIQUE(sale_id),
+            FOREIGN KEY(sale_id) REFERENCES sales(id),
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        );
+        CREATE TABLE IF NOT EXISTS audit_logs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER,
+            username TEXT NOT NULL,
+            action TEXT NOT NULL,
+            detail TEXT DEFAULT '',
+            created_at TEXT NOT NULL,
+            FOREIGN KEY(user_id) REFERENCES users(id)
+        );
+        """)
+        now = datetime.now().isoformat(timespec="seconds")
+        if not c.execute("SELECT 1 FROM users WHERE username='admin'").fetchone():
+            c.execute("INSERT INTO users(username,pin,role,created_at) VALUES (?,?,?,?)",
+                      ('admin', '1234', 'Admin', now))
+        self.db.conn.commit()
+        row = c.execute("SELECT id,username,role FROM users WHERE username=? AND active=1",
+                         (self.db.get_setting('active_username', 'admin'),)).fetchone()
+        if not row:
+            row = c.execute("SELECT id,username,role FROM users WHERE username='admin'").fetchone()
+        self.active_user = dict(row) if row else {'id': 1, 'username': 'admin', 'role': 'Admin'}
+
+    def _audit(self, action, detail=''):
+        try:
+            u = getattr(self, 'active_user', {'id': None, 'username': self.cashier_name})
+            self.db.conn.execute(
+                "INSERT INTO audit_logs(user_id,username,action,detail,created_at) VALUES (?,?,?,?,?)",
+                (u.get('id'), u.get('username', self.cashier_name), str(action), str(detail),
+                 datetime.now().isoformat(timespec='seconds'))
+            )
+            self.db.conn.commit()
+        except Exception:
+            pass
+
+    def _active_shift(self):
+        try:
+            return self.db.conn.execute(
+                "SELECT * FROM shifts WHERE status='OPEN' AND user_id=? ORDER BY id DESC LIMIT 1",
+                (getattr(self, 'active_user', {}).get('id', 1),)
+            ).fetchone()
+        except Exception:
+            return None
+
+    def _cash_summary(self, shift_id):
+        sh = self.db.conn.execute("SELECT * FROM shifts WHERE id=?", (shift_id,)).fetchone()
+        if not sh:
+            return 0, 0, 0, 0
+        cash_sales = self.db.conn.execute("""
+            SELECT COALESCE(SUM(total),0) total FROM sales
+            WHERE payment_method='Tunai' AND created_at>=?
+              AND created_at<=COALESCE(?, datetime('now','localtime'))
+        """, (sh['opened_at'], sh['closed_at'])).fetchone()['total']
+        movements = self.db.conn.execute("""
+            SELECT
+              COALESCE(SUM(CASE WHEN movement_type='IN' THEN amount ELSE 0 END),0) cash_in,
+              COALESCE(SUM(CASE WHEN movement_type='OUT' THEN amount ELSE 0 END),0) cash_out
+            FROM cash_movements WHERE shift_id=?
+        """, (shift_id,)).fetchone()
+        expected = float(sh['opening_cash']) + float(cash_sales) + float(movements['cash_in']) - float(movements['cash_out'])
+        return float(sh['opening_cash']), float(cash_sales), float(movements['cash_in']), float(movements['cash_out'])
+
+    def checkout(self):
+        before = len(self.db.sales(1)) if hasattr(self.db, 'sales') else 0
+        self._checkout_v3()
+        try:
+            if len(self.cart) == 0:
+                # _checkout_v3 clears cart only after a successful save.
+                # Find the newest sale and audit it without changing V3 behavior.
+                sale = self.db.sales(1)[0] if self.db.sales(1) else None
+                if sale:
+                    self._audit('SALE', f"{sale['invoice']} | {self.money(sale['total'])} | {sale['payment_method']}")
+        except Exception:
+            pass
+
+    def business_center_popup(self):
+        content = BoxLayout(orientation='vertical', padding=dp(12), spacing=dp(8))
+        actions = [
+            ('LOGIN KASIR', self.login_popup),
+            ('SHIFT KAS & TUTUP SHIFT', self.shift_popup),
+            ('KAS MASUK / KAS KELUAR', self.cash_movement_popup),
+            ('SUPPLIER & PEMBELIAN', self.supplier_popup),
+            ('MANAJEMEN USER', self.user_management_popup),
+            ('RETUR TRANSAKSI', self.return_popup),
+            ('AUDIT LOG', self.audit_popup),
+        ]
+        for text, fn in actions:
+            b = Button(text=text, size_hint_y=None, height=dp(44), background_normal='',
+                       background_color=(.10,.15,.22,1), color=(1,1,1,1), bold=True)
+            b.bind(on_release=lambda _b, f=fn: (self._close_popup(), f()))
+            content.add_widget(b)
+        content.add_widget(Widget())
+        self._business_popup = WhitePopup(title='V4.6 BUSINESS CENTER', content=content,
+                                          size_hint=(.92, .78), auto_dismiss=True)
+        self._business_popup.open()
+
+    def _close_popup(self):
+        p = getattr(self, '_business_popup', None)
+        if p:
+            try: p.dismiss()
+            except Exception: pass
+
+    def login_popup(self):
+        box = BoxLayout(orientation='vertical', padding=dp(12), spacing=dp(8))
+        user = TextInput(hint_text='Username', multiline=False, size_hint_y=None, height=dp(44))
+        pin = TextInput(hint_text='PIN', password=True, multiline=False, input_filter='int', size_hint_y=None, height=dp(44))
+        status = Label(text='Masuk dengan akun kasir.', size_hint_y=None, height=dp(32), font_size='11sp')
+        box.add_widget(user); box.add_widget(pin); box.add_widget(status)
+        btn = Button(text='MASUK', size_hint_y=None, height=dp(46), background_normal='', background_color=(.04,.58,.30,1), color=(1,1,1,1), bold=True)
+        box.add_widget(btn)
+        pop = WhitePopup(title='LOGIN KASIR', content=box, size_hint=(.88,.48))
+        def do_login(*_):
+            row = self.db.conn.execute("SELECT * FROM users WHERE username=? AND pin=? AND active=1", (user.text.strip(), pin.text.strip())).fetchone()
+            if not row:
+                status.text = 'Username atau PIN salah.'
+                return
+            self.active_user = dict(row)
+            self.cashier_name = row['username']
+            self.db.set_setting('cashier_name', row['username'])
+            self.db.set_setting('active_username', row['username'])
+            self._audit('LOGIN', f"Role={row['role']}")
+            pop.dismiss()
+            self.info(f"Login berhasil.\nKasir: {row['username']}\nRole: {row['role']}", 'Login')
+            self.refresh_dashboard()
+        btn.bind(on_release=do_login)
+        pop.open()
+
+    def shift_popup(self):
+        sh = self._active_shift()
+        if sh:
+            opening, sales, cin, cout = self._cash_summary(sh['id'])
+            expected = opening + sales + cin - cout
+            box = BoxLayout(orientation='vertical', padding=dp(12), spacing=dp(7))
+            for t in [f"Kasir: {self.active_user['username']}", f"Buka: {sh['opened_at']}", f"Kas awal: {self.money(opening)}", f"Penjualan tunai: {self.money(sales)}", f"Kas masuk: {self.money(cin)}", f"Kas keluar: {self.money(cout)}", f"Kas seharusnya: {self.money(expected)}"]:
+                box.add_widget(Label(text=t, size_hint_y=None, height=dp(28), halign='left'))
+            close_input = TextInput(hint_text='Kas aktual saat tutup', input_filter='float', multiline=False, size_hint_y=None, height=dp(44))
+            box.add_widget(close_input)
+            b = Button(text='TUTUP SHIFT', size_hint_y=None, height=dp(46), background_normal='', background_color=(.75,.25,.12,1), color=(1,1,1,1), bold=True)
+            box.add_widget(b)
+            pop = WhitePopup(title='SHIFT AKTIF', content=box, size_hint=(.90,.72))
+            def close_shift(*_):
+                try: actual = float(close_input.text or 0)
+                except ValueError: actual = -1
+                if actual < 0: self.info('Masukkan kas aktual yang valid.'); return
+                diff = actual - expected
+                self.db.conn.execute("UPDATE shifts SET closing_cash=?,expected_cash=?,difference=?,closed_at=?,status='CLOSED' WHERE id=?", (actual,expected,diff,datetime.now().isoformat(timespec='seconds'),sh['id']))
+                self.db.conn.commit(); self._audit('CLOSE_SHIFT', f"Shift {sh['id']} | Selisih {self.money(diff)}")
+                pop.dismiss(); self.info(f"Shift ditutup.\nSeharusnya: {self.money(expected)}\nAktual: {self.money(actual)}\nSelisih: {self.money(diff)}", 'Tutup Shift'); self.refresh_dashboard()
+            b.bind(on_release=close_shift); pop.open(); return
+        box = BoxLayout(orientation='vertical', padding=dp(12), spacing=dp(8))
+        box.add_widget(Label(text=f"Kasir: {self.active_user['username']}", size_hint_y=None, height=dp(30)))
+        opening = TextInput(hint_text='Modal awal kas', input_filter='float', multiline=False, size_hint_y=None, height=dp(44))
+        box.add_widget(opening)
+        b = Button(text='BUKA SHIFT', size_hint_y=None, height=dp(46), background_normal='', background_color=(.04,.58,.30,1), color=(1,1,1,1), bold=True)
+        box.add_widget(b)
+        pop = WhitePopup(title='BUKA SHIFT', content=box, size_hint=(.88,.42))
+        def open_shift(*_):
+            try: amount=float(opening.text or 0)
+            except ValueError: amount=-1
+            if amount < 0: self.info('Modal awal tidak valid.'); return
+            now=datetime.now().isoformat(timespec='seconds')
+            cur=self.db.conn.execute("INSERT INTO shifts(user_id,opening_cash,opened_at,status) VALUES (?,?,?,'OPEN')",(self.active_user['id'],amount,now))
+            self.db.conn.commit(); self._audit('OPEN_SHIFT', f"Shift {cur.lastrowid} | Modal {self.money(amount)}")
+            pop.dismiss(); self.info(f"Shift dibuka dengan modal {self.money(amount)}.",'Shift'); self.refresh_dashboard()
+        b.bind(on_release=open_shift); pop.open()
+
+    def cash_movement_popup(self):
+        sh=self._active_shift()
+        if not sh:
+            self.info('Buka shift terlebih dahulu.','Kas'); return
+        box=BoxLayout(orientation='vertical',padding=dp(12),spacing=dp(8))
+        sp=Spinner(text='Kas Masuk',values=('Kas Masuk','Kas Keluar'),size_hint_y=None,height=dp(44))
+        amount=TextInput(hint_text='Nominal',input_filter='float',multiline=False,size_hint_y=None,height=dp(44))
+        note=TextInput(hint_text='Keterangan',multiline=False,size_hint_y=None,height=dp(44))
+        save=Button(text='SIMPAN',size_hint_y=None,height=dp(46),background_normal='',background_color=(.10,.42,.72,1),color=(1,1,1,1),bold=True)
+        for w in (sp,amount,note,save): box.add_widget(w)
+        pop=WhitePopup(title='KAS MASUK / KAS KELUAR',content=box,size_hint=(.90,.55))
+        def save_move(*_):
+            try: val=float(amount.text or 0)
+            except ValueError: val=0
+            if val<=0: self.info('Nominal harus lebih dari 0.'); return
+            typ='IN' if sp.text=='Kas Masuk' else 'OUT'
+            self.db.conn.execute("INSERT INTO cash_movements(shift_id,user_id,movement_type,amount,note,created_at) VALUES (?,?,?,?,?,?)",(sh['id'],self.active_user['id'],typ,val,note.text.strip(),datetime.now().isoformat(timespec='seconds')))
+            self.db.conn.commit(); self._audit('CASH_'+typ, f"{self.money(val)} | {note.text.strip()}")
+            pop.dismiss(); self.info('Pergerakan kas berhasil disimpan.','Kas'); self.refresh_dashboard()
+        save.bind(on_release=save_move); pop.open()
+
+    def user_management_popup(self):
+        if getattr(self, 'active_user', {}).get('role') != 'Admin':
+            self.info('Hanya Admin yang dapat mengelola user.', 'Akses Ditolak')
+            return
+        box=BoxLayout(orientation='vertical',padding=dp(10),spacing=dp(6))
+        rows=self.db.conn.execute("SELECT * FROM users ORDER BY active DESC, username").fetchall()
+        grid=GridLayout(cols=1,spacing=dp(4),size_hint_y=None); grid.bind(minimum_height=grid.setter('height'))
+        for r in rows:
+            grid.add_widget(Label(text=f"{r['username']} | {r['role']} | {'AKTIF' if r['active'] else 'NONAKTIF'}",size_hint_y=None,height=dp(34),halign='left'))
+        scroll=ScrollView(do_scroll_x=False); scroll.add_widget(grid); box.add_widget(scroll)
+        add=Button(text='TAMBAH USER',size_hint_y=None,height=dp(44),background_normal='',background_color=(.04,.58,.30,1),color=(1,1,1,1),bold=True); box.add_widget(add)
+        pop=WhitePopup(title='MANAJEMEN USER',content=box,size_hint=(.92,.72))
+        def add_user(*_):
+            form=BoxLayout(orientation='vertical',padding=dp(10),spacing=dp(7))
+            username=TextInput(hint_text='Username',multiline=False,size_hint_y=None,height=dp(42))
+            pin=TextInput(hint_text='PIN 4-8 digit',password=True,input_filter='int',multiline=False,size_hint_y=None,height=dp(42))
+            role=Spinner(text='Kasir',values=('Kasir','Admin'),size_hint_y=None,height=dp(42))
+            save=Button(text='SIMPAN USER',size_hint_y=None,height=dp(44),background_normal='',background_color=(.04,.58,.30,1),color=(1,1,1,1))
+            for w in (username,pin,role,save): form.add_widget(w)
+            pp=WhitePopup(title='TAMBAH USER',content=form,size_hint=(.90,.58))
+            def save_u(*_):
+                u=username.text.strip(); p=pin.text.strip()
+                if len(u)<3 or not p.isdigit() or not (4<=len(p)<=8): self.info('Username minimal 3 karakter dan PIN 4-8 digit.'); return
+                try:
+                    self.db.conn.execute("INSERT INTO users(username,pin,role,created_at) VALUES (?,?,?,?)",(u,p,role.text,datetime.now().isoformat(timespec='seconds')))
+                    self.db.conn.commit()
+                except Exception:
+                    self.info('Username sudah digunakan.'); return
+                self._audit('ADD_USER',f"{u} | {role.text}"); pp.dismiss(); pop.dismiss(); self.user_management_popup()
+            save.bind(on_release=save_u); pp.open()
+        add.bind(on_release=add_user); pop.open()
+
+    def supplier_popup(self):
+        box=BoxLayout(orientation='vertical',padding=dp(10),spacing=dp(6))
+        rows=self.db.conn.execute("SELECT * FROM suppliers WHERE active=1 ORDER BY name").fetchall()
+        scroll=ScrollView(do_scroll_x=False); grid=GridLayout(cols=1,spacing=dp(4),size_hint_y=None); grid.bind(minimum_height=grid.setter('height'))
+        if not rows: grid.add_widget(Label(text='Belum ada supplier.',size_hint_y=None,height=dp(34)))
+        for r in rows: grid.add_widget(Label(text=f"{r['name']} | {r['phone'] or '-'}\n{r['address'] or '-'}",size_hint_y=None,height=dp(52),halign='left'))
+        scroll.add_widget(grid); box.add_widget(scroll)
+        button_row=BoxLayout(size_hint_y=None,height=dp(44),spacing=dp(6))
+        add=Button(text='TAMBAH SUPPLIER',background_normal='',background_color=(.04,.58,.30,1),color=(1,1,1,1),bold=True)
+        buy=Button(text='CATAT PEMBELIAN',background_normal='',background_color=(.10,.42,.72,1),color=(1,1,1,1),bold=True)
+        button_row.add_widget(add); button_row.add_widget(buy); box.add_widget(button_row)
+        pop=WhitePopup(title='SUPPLIER',content=box,size_hint=(.92,.72))
+        def add_supplier(*_):
+            form=BoxLayout(orientation='vertical',padding=dp(10),spacing=dp(7))
+            name=TextInput(hint_text='Nama supplier',multiline=False,size_hint_y=None,height=dp(42)); phone=TextInput(hint_text='Telepon',multiline=False,size_hint_y=None,height=dp(42)); addr=TextInput(hint_text='Alamat',multiline=False,size_hint_y=None,height=dp(42)); save=Button(text='SIMPAN',size_hint_y=None,height=dp(44),background_normal='',background_color=(.04,.58,.30,1),color=(1,1,1,1))
+            for w in (name,phone,addr,save): form.add_widget(w)
+            pp=WhitePopup(title='TAMBAH SUPPLIER',content=form,size_hint=(.90,.55))
+            def save_s(*_):
+                if not name.text.strip(): self.info('Nama supplier wajib diisi.'); return
+                self.db.conn.execute("INSERT INTO suppliers(name,phone,address,created_at) VALUES (?,?,?,?)",(name.text.strip(),phone.text.strip(),addr.text.strip(),datetime.now().isoformat(timespec='seconds'))); self.db.conn.commit(); self._audit('ADD_SUPPLIER',name.text.strip()); pp.dismiss(); pop.dismiss(); self.supplier_popup()
+            save.bind(on_release=save_s); pp.open()
+        add.bind(on_release=add_supplier)
+        def purchase_form(*_):
+            suppliers=self.db.conn.execute("SELECT * FROM suppliers WHERE active=1 ORDER BY name").fetchall()
+            products=self.db.products("")
+            if not suppliers or not products:
+                self.info('Supplier dan produk harus tersedia terlebih dahulu.'); return
+            form=BoxLayout(orientation='vertical',padding=dp(10),spacing=dp(6))
+            svals=[f"{r['id']}|{r['name']}" for r in suppliers]
+            pvals=[f"{r['id']}|{r['name']}" for r in products]
+            sp=Spinner(text=svals[0],values=svals,size_hint_y=None,height=dp(42))
+            pr=Spinner(text=pvals[0],values=pvals,size_hint_y=None,height=dp(42))
+            qty=TextInput(hint_text='Jumlah stok masuk',input_filter='float',multiline=False,size_hint_y=None,height=dp(42))
+            cost=TextInput(hint_text='Harga modal per unit',input_filter='float',multiline=False,size_hint_y=None,height=dp(42))
+            note=TextInput(hint_text='Catatan pembelian',multiline=False,size_hint_y=None,height=dp(42))
+            save=Button(text='SIMPAN PEMBELIAN',size_hint_y=None,height=dp(44),background_normal='',background_color=(.04,.58,.30,1),color=(1,1,1,1),bold=True)
+            for w in (sp,pr,qty,cost,note,save): form.add_widget(w)
+            pp=WhitePopup(title='CATAT PEMBELIAN',content=form,size_hint=(.92,.76))
+            def save_purchase(*_):
+                try:
+                    sid=int(sp.text.split('|',1)[0]); pid=int(pr.text.split('|',1)[0]); q=float(qty.text or 0); cp=float(cost.text or 0)
+                except Exception: self.info('Data pembelian tidak valid.'); return
+                if q<=0 or cp<0: self.info('Jumlah atau harga modal tidak valid.'); return
+                prod=self.db.product_by_id(pid); before=float(prod['stock'])
+                total=q*cp; inv='PUR'+datetime.now().strftime('%Y%m%d%H%M%S%f')[:-3]; now=datetime.now().isoformat(timespec='seconds')
+                try:
+                    self.db.conn.execute('BEGIN')
+                    self.db.conn.execute("INSERT INTO purchases(supplier_id,invoice,total,note,created_at,user_id) VALUES (?,?,?,?,?,?)",(sid,inv,total,note.text.strip(),now,self.active_user['id']))
+                    pur_id=self.db.conn.execute('SELECT last_insert_rowid()').fetchone()[0]
+                    self.db.conn.execute("INSERT INTO purchase_items(purchase_id,product_id,qty,cost_price,line_total) VALUES (?,?,?,?,?)",(pur_id,pid,q,cp,total))
+                    self.db.conn.execute("UPDATE products SET stock=stock+?, buy_price=? WHERE id=?",(q,cp,pid))
+                    self.db.conn.execute("INSERT INTO stock_movements(product_id,product_name,movement_type,qty,stock_before,stock_after,reference,note,created_at) VALUES (?,?,?,?,?,?,?,?,?)",(pid,prod['name'],'PEMBELIAN',q,before,before+q,inv,note.text.strip(),now))
+                    self.db.conn.commit()
+                except Exception as e:
+                    self.db.conn.rollback(); self.info(f'Pembelian gagal: {e}','Pembelian'); return
+                self._audit('PURCHASE',f"{inv} | {prod['name']} | {q:g} | {self.money(total)}")
+                pp.dismiss(); pop.dismiss(); self.refresh_all(); self.info(
+                    f"Pembelian tersimpan.\nNo: {inv}\nStok bertambah: {q:g} {prod['unit']}",
+                    'Pembelian'
+                )
+            save.bind(on_release=save_purchase); pp.open()
+        buy.bind(on_release=purchase_form); pop.open()
+
+    def return_popup(self):
+        box=BoxLayout(orientation='vertical',padding=dp(12),spacing=dp(8))
+        inv=TextInput(hint_text='Nomor invoice',multiline=False,size_hint_y=None,height=dp(44)); reason=TextInput(hint_text='Alasan retur',multiline=False,size_hint_y=None,height=dp(44)); info=Label(text='Retur penuh: seluruh item invoice dikembalikan ke stok.',size_hint_y=None,height=dp(42),font_size='11sp'); btn=Button(text='PROSES RETUR',size_hint_y=None,height=dp(46),background_normal='',background_color=(.75,.25,.12,1),color=(1,1,1,1),bold=True)
+        for w in (inv,reason,info,btn): box.add_widget(w)
+        pop=WhitePopup(title='RETUR TRANSAKSI',content=box,size_hint=(.90,.52))
+        def process(*_):
+            row=self.db.conn.execute("SELECT * FROM sales WHERE invoice=?",(inv.text.strip(),)).fetchone()
+            if not row: self.info('Invoice tidak ditemukan.'); return
+            if self.db.conn.execute('SELECT 1 FROM returns WHERE sale_id=?',(row['id'],)).fetchone(): self.info('Invoice ini sudah pernah diretur.'); return
+            items=self.db.conn.execute('SELECT * FROM sale_items WHERE sale_id=?',(row['id'],)).fetchall()
+            try:
+                self.db.conn.execute('BEGIN')
+                for it in items:
+                    self.db.conn.execute('UPDATE products SET stock=stock+? WHERE id=?',(it['qty'],it['product_id']))
+                    p=self.db.conn.execute('SELECT name,stock FROM products WHERE id=?',(it['product_id'],)).fetchone()
+                    self.db.conn.execute("INSERT INTO stock_movements(product_id,product_name,movement_type,qty,stock_before,stock_after,reference,note,created_at) VALUES (?,?,?,?,?,?,?,?,?)",(it['product_id'],it['product_name'],'RETUR',it['qty'],float(p['stock'])-float(it['qty']),float(p['stock']),row['invoice'],reason.text.strip(),datetime.now().isoformat(timespec='seconds')))
+                self.db.conn.execute("INSERT INTO returns(sale_id,invoice,amount,reason,user_id,created_at) VALUES (?,?,?,?,?,?)",(row['id'],row['invoice'],row['total'],reason.text.strip(),self.active_user['id'],datetime.now().isoformat(timespec='seconds')))
+                self.db.conn.commit()
+            except Exception as e:
+                self.db.conn.rollback(); self.info(f'Retur gagal: {e}','Retur'); return
+            self._audit('RETURN',f"{row['invoice']} | {self.money(row['total'])}"); pop.dismiss(); self.refresh_all(); self.info(f"Retur berhasil.\nStok dikembalikan untuk invoice {row['invoice']}.",'Retur')
+        btn.bind(on_release=process); pop.open()
+
+    def audit_popup(self):
+        rows=self.db.conn.execute("SELECT * FROM audit_logs ORDER BY id DESC LIMIT 60").fetchall()
+        grid=GridLayout(cols=1,spacing=dp(3),size_hint_y=None); grid.bind(minimum_height=grid.setter('height'))
+        if not rows: grid.add_widget(Label(text='Belum ada aktivitas.',size_hint_y=None,height=dp(34)))
+        for r in rows:
+            grid.add_widget(Label(text=f"{r['created_at']} | {r['username']}\n{r['action']} â€” {r['detail']}",size_hint_y=None,height=dp(52),halign='left',valign='middle',text_size=(None,None),font_size='10sp'))
+        scroll=ScrollView(do_scroll_x=False); scroll.add_widget(grid)
+        box=BoxLayout(orientation='vertical',padding=dp(8)); box.add_widget(scroll)
+        WhitePopup(title='AUDIT LOG',content=box,size_hint=(.94,.82)).open()
 
     def refresh_products(self, search):
         grid = self.root.ids.products_grid
