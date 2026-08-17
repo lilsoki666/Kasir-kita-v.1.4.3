@@ -1,4 +1,4 @@
-__version__ = "4.7.1-universal-category"
+__version__ = "4.8.0-universal-business"
 
 import csv
 import os
@@ -984,6 +984,25 @@ KV = """
                         text: app.cashier_name
 
                     SectionLabel:
+                        text: "Profil Usaha"
+
+                    Spinner:
+                        id: setting_business_type
+                        text: app.business_type
+                        values: ["Umum", "Toko Pakaian", "Bengkel", "Warung / Retail", "Toko Elektronik", "Toko Bangunan", "Salon / Kecantikan", "Jasa", "Lainnya"]
+                        size_hint_y: None
+                        height: dp(44)
+
+                    Label:
+                        text: "Jenis usaha hanya membantu menyesuaikan istilah aplikasi. Anda tetap bebas membuat kategori sendiri."
+                        text_size: self.width, None
+                        halign: "left"
+                        color: .35, .40, .48, 1
+                        font_size: "10sp"
+                        size_hint_y: None
+                        height: dp(42)
+
+                    SectionLabel:
                         text: "Printer Thermal Bluetooth"
 
                     ModernTextInput:
@@ -1227,6 +1246,7 @@ class POSApp(App):
         self.store_instagram = self.db.get_setting("store_instagram", "")
         self.store_whatsapp = self.db.get_setting("store_whatsapp", "")
         self.receipt_footer = self.db.get_setting("receipt_footer", "Terima Kasih Atas Kunjungan Anda!")
+        self.business_type = self.db.get_setting("business_type", "Umum")
 
     def show_screen(self, name):
         """Navigate between top-level screens with directional horizontal sliding.
@@ -1280,11 +1300,52 @@ class POSApp(App):
     def money(value):
         return "Rp {:,.0f}".format(float(value)).replace(",", ".")
 
+    def _v48_products(self, search=""):
+        """Read products directly so V4.8 fields work even if database.py uses a fixed SELECT list."""
+        q = str(search or "").strip()
+        if q:
+            like = f"%{q}%"
+            return self.db.conn.execute(
+                "SELECT p.*, c.name AS category_name FROM products p "
+                "LEFT JOIN categories c ON c.id=p.category_id "
+                "WHERE p.active=1 AND (p.name LIKE ? OR COALESCE(p.barcode,'') LIKE ?) "
+                "ORDER BY p.name", (like, like)
+            ).fetchall()
+        return self.db.conn.execute(
+            "SELECT p.*, c.name AS category_name FROM products p "
+            "LEFT JOIN categories c ON c.id=p.category_id "
+            "WHERE p.active=1 ORDER BY p.name"
+        ).fetchall()
+
+    def _v48_product_by_id(self, product_id):
+        return self.db.conn.execute(
+            "SELECT p.*, c.name AS category_name FROM products p "
+            "LEFT JOIN categories c ON c.id=p.category_id WHERE p.id=?",
+            (product_id,)
+        ).fetchone()
+
+    @staticmethod
+    def _is_service_product(p):
+        """Works with sqlite3.Row and normal dicts."""
+        try:
+            item_type = p["item_type"] if "item_type" in p.keys() else "BARANG"
+            track_stock = p["track_stock"] if "track_stock" in p.keys() else 1
+        except AttributeError:
+            item_type = p.get("item_type", "BARANG")
+            track_stock = p.get("track_stock", 1)
+        return str(item_type or "BARANG").upper() == "JASA" or not int(track_stock or 0)
+
 
     def refresh_dashboard(self):
         """Refresh the V2 dashboard using only the existing SQLite schema."""
         try:
             s, product_count, low = self.db.summary_today()
+            # V4.8: services/non-stock items must never appear as low-stock products.
+            low = self.db.conn.execute("""
+                SELECT COUNT(*) FROM products
+                WHERE active=1 AND COALESCE(item_type,'BARANG')='BARANG'
+                  AND COALESCE(track_stock,1)=1 AND stock <= min_stock
+            """).fetchone()[0]
             self.root.ids.dash_sales.text = self.money(s["total"])
             self.root.ids.dash_trx.text = f"{s['transactions']}"
             self.root.ids.dash_products.text = f"{product_count}"
@@ -1351,7 +1412,8 @@ class POSApp(App):
             low_rows = conn.execute("""
                 SELECT name, stock, min_stock, unit
                 FROM products
-                WHERE active=1 AND stock <= min_stock
+                WHERE active=1 AND COALESCE(item_type,'BARANG')='BARANG'
+                  AND COALESCE(track_stock,1)=1 AND stock <= min_stock
                 ORDER BY stock ASC, name
                 LIMIT 8
             """).fetchall()
@@ -1452,14 +1514,16 @@ class POSApp(App):
     def refresh_pos_products(self, search):
         grid = self.root.ids.product_grid
         grid.clear_widgets()
-        products = self.db.products(search)
+        products = self._v48_products(search)
         category = getattr(self, "pos_category", "Semua")
         if category != "Semua":
             products = [p for p in products if str(p["category_name"] or "") == category]
         for p in products[:100]:
+            is_service = self._is_service_product(p)
+            stock_text = "JASA" if is_service else f"Stok {float(p['stock']):g} {p['unit']}"
             btn = Button(
-                text=f"{p['name']}\n{self.money(p['sell_price'])}  |  Stok {p['stock']:g} {p['unit']}",
-                size_hint_y=None, height=dp(56),
+                text=f"{p['name']}\n{self.money(p['sell_price'])}  |  {stock_text}",
+                size_hint_y=None, height=dp(60),
                 background_normal="",
                 background_color=(1, 1, 1, 1),
                 color=(.08, .10, .14, 1),
@@ -1474,13 +1538,16 @@ class POSApp(App):
             grid.add_widget(btn)
 
     def add_to_cart(self, product_id):
-        p = self.db.product_by_id(product_id)
-        if not p or p["stock"] <= 0:
+        p = self._v48_product_by_id(product_id)
+        if not p:
+            return
+        is_service = self._is_service_product(p)
+        if not is_service and float(p["stock"]) <= 0:
             self.info("Stok produk habis.")
             return
         for item in self.cart:
             if item["id"] == product_id:
-                if item["qty"] + 1 > p["stock"]:
+                if not is_service and item["qty"] + 1 > float(p["stock"]):
                     self.info("Jumlah melebihi stok.")
                     return
                 item["qty"] += 1
@@ -1490,7 +1557,8 @@ class POSApp(App):
         self.cart.append({
             "id": p["id"], "name": p["name"], "qty": 1,
             "price": float(p["sell_price"]), "discount": 0,
-            "line_total": float(p["sell_price"])
+            "line_total": float(p["sell_price"]),
+            "item_type": "JASA" if is_service else "BARANG",
         })
         self.update_cart_summary()
 
@@ -1723,17 +1791,18 @@ class POSApp(App):
     def change_qty(self, product_id, delta):
         for item in self.cart:
             if item["id"] == product_id:
-                p = self.db.product_by_id(product_id)
+                p = self._v48_product_by_id(product_id)
+                is_service = self._is_service_product(p)
                 item["qty"] += delta
                 if item["qty"] <= 0:
                     self.remove_cart(product_id)
                     return
-                if item["qty"] > p["stock"]:
-                    item["qty"] = p["stock"]
+                if not is_service and item["qty"] > float(p["stock"]):
+                    item["qty"] = float(p["stock"])
                 item["line_total"] = item["qty"] * item["price"]
                 break
+        self.refresh_cart_popup_grid() if self.cart_popup else None
         self.update_cart_summary()
-        self.refresh_cart_popup_grid()
 
     def remove_cart(self, product_id):
         self.cart = [x for x in self.cart if x["id"] != product_id]
@@ -1865,18 +1934,44 @@ class POSApp(App):
             paid_val = total
             change_val = 0
 
+        # Database V4.x already owns the sale transaction and stock decrement.
+        # For non-stock services, temporarily expose a safe virtual stock value
+        # only during save_sale, then restore the original value immediately.
+        virtualized = []
         try:
+            for item in self.cart:
+                p = self._v48_product_by_id(item["id"])
+                if p and (self._is_service_product(p)):
+                    original = float(p["stock"])
+                    virtualized.append((item["id"], original))
+                    self.db.conn.execute("UPDATE products SET stock=? WHERE id=?", (999999999.0, item["id"]))
+            self.db.conn.commit()
+
             invoice = self.db.save_sale(
                 self.cart, subtotal, discount, tax, total, paid_val, change_val, payment
             )
         except ValueError as exc:
+            for pid, original in virtualized:
+                self.db.conn.execute("UPDATE products SET stock=? WHERE id=?", (original, pid))
+            self.db.conn.commit()
             self.info(str(exc), "Transaksi Ditolak")
             self.refresh_all()
             return
         except Exception:
+            for pid, original in virtualized:
+                self.db.conn.execute("UPDATE products SET stock=? WHERE id=?", (original, pid))
+            self.db.conn.commit()
             self.log_startup_error()
             self.info("Transaksi gagal disimpan. Tidak ada stok yang dikurangi.", "Kesalahan")
             return
+
+        # Restore service/non-stock items to their previous quantity (normally 0).
+        try:
+            for pid, original in virtualized:
+                self.db.conn.execute("UPDATE products SET stock=? WHERE id=?", (original, pid))
+            self.db.conn.commit()
+        except Exception:
+            self.log_startup_error()
 
         receipt_text = self.generate_receipt_text(
             invoice, self.cart, total, paid_val, change_val, payment=payment,
@@ -1999,6 +2094,16 @@ class POSApp(App):
         if not row:
             row = c.execute("SELECT id,username,role FROM users WHERE username='admin'").fetchone()
         self.active_user = dict(row) if row else {'id': 1, 'username': 'admin', 'role': 'Admin'}
+
+        # V4.8: universal product/service fields. Existing databases are kept intact.
+        product_columns = {r[1] for r in c.execute("PRAGMA table_info(products)").fetchall()}
+        if "item_type" not in product_columns:
+            c.execute("ALTER TABLE products ADD COLUMN item_type TEXT NOT NULL DEFAULT 'BARANG'")
+        if "track_stock" not in product_columns:
+            c.execute("ALTER TABLE products ADD COLUMN track_stock INTEGER NOT NULL DEFAULT 1")
+        c.execute("UPDATE products SET item_type='BARANG' WHERE item_type IS NULL OR item_type=''")
+        c.execute("UPDATE products SET track_stock=1 WHERE track_stock IS NULL")
+        self.db.conn.commit()
 
     def _audit(self, action, detail=''):
         try:
@@ -2265,7 +2370,7 @@ class POSApp(App):
         add.bind(on_release=add_supplier)
         def purchase_form(*_):
             suppliers=self.db.conn.execute("SELECT * FROM suppliers WHERE active=1 ORDER BY name").fetchall()
-            products=self.db.products("")
+            products=self._v48_products("")
             if not suppliers or not products:
                 self.info('Supplier dan produk harus tersedia terlebih dahulu.'); return
             form=BoxLayout(orientation='vertical',padding=dp(10),spacing=dp(6))
@@ -2284,7 +2389,10 @@ class POSApp(App):
                     sid=int(sp.text.split('|',1)[0]); pid=int(pr.text.split('|',1)[0]); q=float(qty.text or 0); cp=float(cost.text or 0)
                 except Exception: self.info('Data pembelian tidak valid.'); return
                 if q<=0 or cp<0: self.info('Jumlah atau harga modal tidak valid.'); return
-                prod=self.db.product_by_id(pid); before=float(prod['stock'])
+                prod=self._v48_product_by_id(pid);
+                if self._is_service_product(prod):
+                    self.info("Item jasa tidak dapat dicatat sebagai pembelian stok.", "Pembelian"); return
+                before=float(prod['stock'])
                 total=q*cp; inv='PUR'+datetime.now().strftime('%Y%m%d%H%M%S%f')[:-3]; now=datetime.now().isoformat(timespec='seconds')
                 try:
                     self.db.conn.execute('BEGIN')
@@ -2317,6 +2425,9 @@ class POSApp(App):
             try:
                 self.db.conn.execute('BEGIN')
                 for it in items:
+                    prod = self._v48_product_by_id(it['product_id'])
+                    if self._is_service_product(prod):
+                        continue
                     self.db.conn.execute('UPDATE products SET stock=stock+? WHERE id=?',(it['qty'],it['product_id']))
                     p=self.db.conn.execute('SELECT name,stock FROM products WHERE id=?',(it['product_id'],)).fetchone()
                     self.db.conn.execute("INSERT INTO stock_movements(product_id,product_name,movement_type,qty,stock_before,stock_after,reference,note,created_at) VALUES (?,?,?,?,?,?,?,?,?)",(it['product_id'],it['product_name'],'RETUR',it['qty'],float(p['stock'])-float(it['qty']),float(p['stock']),row['invoice'],reason.text.strip(),datetime.now().isoformat(timespec='seconds')))
@@ -2340,17 +2451,16 @@ class POSApp(App):
     def refresh_products(self, search):
         grid = self.root.ids.products_grid
         grid.clear_widgets()
-        for p in self.db.products(search):
-            row = BoxLayout(size_hint_y=None, height=dp(54), spacing=dp(4))
+        for p in self._v48_products(search):
+            is_service = self._is_service_product(p)
+            stock_text = "Jasa â€¢ tanpa stok" if is_service else f"Stok {float(p['stock']):g} {p['unit']}"
+            row = BoxLayout(size_hint_y=None, height=dp(62), spacing=dp(4))
             row.add_widget(Label(
                 text=f"{p['name']} | {p['barcode'] or '-'}\n"
-                     f"Jual {self.money(p['sell_price'])} | Stok {p['stock']:g} {p['unit']}",
-                halign="left",
-                valign="middle",
-                color=(.08,.10,.14,1),
-                font_size="11sp"
+                     f"{('JASA' if is_service else 'BARANG')} â€¢ Jual {self.money(p['sell_price'])} | {stock_text}",
+                halign="left", valign="middle", color=(.08,.10,.14,1), font_size="10sp"
             ))
-            stock = Button(text="Stok", size_hint_x=None, width=dp(58),
+            stock = Button(text="Stok" if not is_service else "Info", size_hint_x=None, width=dp(58),
                            background_normal="", background_color=(.88,.97,.91,1),
                            color=(.05,.45,.22,1), bold=True)
             edit = Button(text="Edit", size_hint_x=None, width=dp(60),
@@ -2359,34 +2469,43 @@ class POSApp(App):
             delete = Button(text="Hapus", size_hint_x=None, width=dp(60),
                             background_normal="", background_color=(.98,.90,.90,1),
                             color=(.72,.12,.12,1), bold=True)
-            stock.bind(on_release=lambda btn, pid=p["id"]: self.stock_form(pid))
+            if is_service:
+                stock.bind(on_release=lambda btn, pid=p["id"]: self.info("Item jasa tidak menggunakan stok.", "Jasa"))
+            else:
+                stock.bind(on_release=lambda btn, pid=p["id"]: self.stock_form(pid))
             edit.bind(on_release=lambda btn, pid=p["id"]: self.product_form(pid))
             delete.bind(on_release=lambda btn, pid=p["id"]: self.delete_product(pid))
-            row.add_widget(stock)
-            row.add_widget(edit)
-            row.add_widget(delete)
+            row.add_widget(stock); row.add_widget(edit); row.add_widget(delete)
             grid.add_widget(row)
 
     def product_form(self, product_id=None):
-        p = self.db.product_by_id(product_id) if product_id else None
+        p = self._v48_product_by_id(product_id) if product_id else None
         box = BoxLayout(orientation="vertical", spacing=dp(6), padding=dp(8))
+        scroll = ScrollView(do_scroll_x=False)
+        inner = BoxLayout(orientation="vertical", spacing=dp(6), size_hint_y=None)
+        inner.bind(minimum_height=inner.setter("height"))
         fields = {}
         for key, hint in [
-            ("barcode", "Barcode (opsional)"),
-            ("name", "Nama produk"),
-            ("buy_price", "Harga beli"),
+            ("barcode", "Barcode / SKU (opsional)"),
+            ("name", "Nama barang atau jasa"),
+            ("buy_price", "Harga modal / biaya"),
             ("sell_price", "Harga jual"),
             ("stock", "Stok"),
-            ("unit", "Satuan"),
+            ("unit", "Satuan (pcs, kg, jam, paket, dll.)"),
             ("min_stock", "Batas stok minimum"),
         ]:
             t = TextInput(
-                hint_text=hint, multiline=False,
-                size_hint_y=None, height=dp(40),
+                hint_text=hint, multiline=False, size_hint_y=None, height=dp(40),
                 text="" if not p else str(p[key] if p[key] is not None else "")
             )
-            fields[key] = t
-            box.add_widget(t)
+            fields[key] = t; inner.add_widget(t)
+
+        item_type = ((p["item_type"] if "item_type" in p.keys() else "BARANG") if p else "BARANG").upper()
+        type_spinner = Spinner(text="Jasa" if item_type == "JASA" else "Barang",
+                               values=("Barang", "Jasa"), size_hint_y=None, height=dp(40))
+        inner.add_widget(Label(text="Tipe item", size_hint_y=None, height=dp(22), halign="left",
+                               color=(.20,.24,.30,1), bold=True, font_size="11sp"))
+        inner.add_widget(type_spinner)
 
         categories = self.db.categories()
         cat_names = [str(c["name"]) for c in categories]
@@ -2394,63 +2513,76 @@ class POSApp(App):
         if p and p["category_id"]:
             for c in categories:
                 if c["id"] == p["category_id"]:
-                    current_cat = c["name"]
-                    break
+                    current_cat = c["name"]; break
+        inner.add_widget(Label(text="Kategori", size_hint_y=None, height=dp(22), halign="left",
+                               color=(.20,.24,.30,1), bold=True, font_size="11sp"))
+        cat_spinner = Spinner(text=current_cat or "Belum ada kategori",
+                              values=cat_names or ["Belum ada kategori"], size_hint_y=None, height=dp(40))
+        inner.add_widget(cat_spinner)
 
-        category_label = Label(
-            text="Kategori Produk",
-            size_hint_y=None, height=dp(22),
-            halign="left", valign="middle",
-            color=(.20, .24, .30, 1), bold=True, font_size="11sp"
-        )
-        category_label.bind(size=lambda w, v: setattr(w, "text_size", v))
-        box.add_widget(category_label)
-
-        cat_spinner = Spinner(
-            text=current_cat or "Belum ada kategori",
-            values=cat_names or ["Belum ada kategori"],
-            size_hint_y=None, height=dp(40)
-        )
-        box.add_widget(cat_spinner)
-
-        save = Button(text="Simpan", size_hint_y=None, height=dp(44))
+        hint = Label(text="Barang memakai stok. Jasa tidak mengurangi stok saat terjual.",
+                     size_hint_y=None, height=dp(38), font_size="10sp", color=(.35,.40,.48,1),
+                     halign="left", valign="middle")
+        hint.bind(size=lambda w,v: setattr(w,"text_size",v))
+        inner.add_widget(hint)
+        scroll.add_widget(inner); box.add_widget(scroll)
+        save = Button(text="Simpan", size_hint_y=None, height=dp(44),
+                      background_normal="", background_color=(.04,.58,.30,1), color=(1,1,1,1), bold=True)
         box.add_widget(save)
-        popup = WhitePopup(title="Produk", content=box, size_hint=(.90, None), height=dp(500))
+        popup = WhitePopup(title="Barang / Jasa", content=box, size_hint=(.92,.88))
+
+        def sync_type(*_):
+            is_service = type_spinner.text == "Jasa"
+            fields["stock"].disabled = is_service
+            fields["min_stock"].disabled = is_service
+            if is_service:
+                fields["stock"].text = "0"
+                fields["min_stock"].text = "0"
+                fields["unit"].text = fields["unit"].text or "jasa"
+            elif fields["unit"].text == "jasa":
+                fields["unit"].text = "pcs"
+        type_spinner.bind(text=sync_type); sync_type()
 
         def save_it(*_):
             try:
-                if not categories:
-                    raise ValueError
+                if not categories: raise ValueError("Buat kategori terlebih dahulu.")
                 cat = next(c for c in categories if c["name"] == cat_spinner.text)
+                is_service = type_spinner.text == "Jasa"
                 data = {
-                    "id": product_id,
-                    "barcode": fields["barcode"].text.strip(),
-                    "name": fields["name"].text.strip(),
-                    "category_id": cat["id"],
+                    "id": product_id, "barcode": fields["barcode"].text.strip(),
+                    "name": fields["name"].text.strip(), "category_id": cat["id"],
                     "buy_price": float(fields["buy_price"].text or 0),
                     "sell_price": float(fields["sell_price"].text or 0),
-                    "stock": float(fields["stock"].text or 0),
-                    "unit": fields["unit"].text.strip() or "pcs",
-                    "min_stock": float(fields["min_stock"].text or 0),
+                    "stock": 0.0 if is_service else float(fields["stock"].text or 0),
+                    "unit": fields["unit"].text.strip() or ("jasa" if is_service else "pcs"),
+                    "min_stock": 0.0 if is_service else float(fields["min_stock"].text or 0),
                 }
-                if not data["name"] or data["sell_price"] < 0:
-                    raise ValueError
+                if not data["name"] or data["sell_price"] < 0: raise ValueError
                 self.db.save_product(data)
-                popup.dismiss()
-                self.refresh_all()
-            except Exception:
-                self.info("Data tidak valid atau barcode sudah digunakan.")
-
-        save.bind(on_release=save_it)
-        popup.open()
+                row = self.db.conn.execute("SELECT id FROM products WHERE barcode=? ORDER BY id DESC LIMIT 1", (data["barcode"],)).fetchone() if data["barcode"] else None
+                if not row:
+                    row = self.db.conn.execute("SELECT id FROM products WHERE name=? AND category_id=? ORDER BY id DESC LIMIT 1", (data["name"], data["category_id"])).fetchone()
+                saved_id = product_id or (row["id"] if row else None)
+                if saved_id:
+                    self.db.conn.execute("UPDATE products SET item_type=?, track_stock=? WHERE id=?",
+                                         ("JASA" if is_service else "BARANG", 0 if is_service else 1, saved_id))
+                    self.db.conn.commit()
+                self._audit("SAVE_ITEM", f"{data['name']} | {'JASA' if is_service else 'BARANG'}")
+                popup.dismiss(); self.refresh_all()
+            except Exception as exc:
+                self.info(str(exc) or "Data tidak valid atau barcode sudah digunakan.", "Barang / Jasa")
+        save.bind(on_release=save_it); popup.open()
 
     def delete_product(self, product_id):
         self.db.delete_product(product_id)
         self.refresh_all()
 
     def stock_form(self, product_id):
-        p = self.db.product_by_id(product_id)
+        p = self._v48_product_by_id(product_id)
         if not p:
+            return
+        if self._is_service_product(p):
+            self.info("Item jasa tidak memiliki stok untuk dikelola.", "Jasa")
             return
 
         box = BoxLayout(orientation="vertical", spacing=dp(8), padding=dp(10))
@@ -2631,11 +2763,11 @@ class POSApp(App):
                    COALESCE(SUM(stock*sell_price),0) retail_value,
                    COALESCE(SUM(CASE WHEN stock<=min_stock THEN 1 ELSE 0 END),0) low,
                    COALESCE(SUM(CASE WHEN stock<=0 THEN 1 ELSE 0 END),0) out_count
-            FROM products WHERE active=1
+            FROM products WHERE active=1 AND COALESCE(item_type,'BARANG')='BARANG' AND COALESCE(track_stock,1)=1
         """).fetchone()
         rows = conn.execute("""
             SELECT name, barcode, stock, min_stock, unit, buy_price, sell_price
-            FROM products WHERE active=1 AND stock<=min_stock
+            FROM products WHERE active=1 AND COALESCE(item_type,'BARANG')='BARANG' AND COALESCE(track_stock,1)=1 AND stock<=min_stock
             ORDER BY stock ASC, name LIMIT 30
         """).fetchall()
         box = BoxLayout(orientation="vertical", padding=dp(10), spacing=dp(6))
@@ -2935,6 +3067,7 @@ class POSApp(App):
         self.db.set_setting("store_instagram", ids.setting_instagram.text.strip())
         self.db.set_setting("store_whatsapp", ids.setting_whatsapp.text.strip())
         self.db.set_setting("receipt_footer", ids.setting_receipt_footer.text.strip() or "Terima Kasih Atas Kunjungan Anda!")
+        self.db.set_setting("business_type", ids.setting_business_type.text.strip() or "Umum")
         self.load_settings()
         self.refresh_all()
         self.info("Pengaturan berhasil disimpan.")
