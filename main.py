@@ -1,4 +1,4 @@
-__version__ = "2.0.0-professional"
+__version__ = "3.0.0-professional"
 
 import csv
 import os
@@ -561,7 +561,7 @@ KV = """
                         cols: 2
                         spacing: dp(8)
                         size_hint_y: None
-                        height: dp(92)
+                        height: dp(140)
 
                         Button:
                             text: "BUKA KASIR"
@@ -578,6 +578,22 @@ KV = """
                             color: 1, 1, 1, 1
                             bold: True
                             on_release: app.show_screen("products")
+
+                        Button:
+                            text: "KEUANGAN"
+                            background_normal: ""
+                            background_color: .12, .42, .72, 1
+                            color: 1, 1, 1, 1
+                            bold: True
+                            on_release: app.finance_popup()
+
+                        Button:
+                            text: "INVENTORY"
+                            background_normal: ""
+                            background_color: .72, .42, .10, 1
+                            color: 1, 1, 1, 1
+                            bold: True
+                            on_release: app.inventory_popup()
 
                     Button:
                         text: "Refresh Dashboard"
@@ -598,10 +614,23 @@ KV = """
                 TitleLabel:
                     text: "Kasir / POS"
 
-                ModernTextInput:
-                    id: search_pos
-                    hint_text: "Cari produk atau scan barcode..."
-                    on_text: app.refresh_pos_products(self.text)
+                BoxLayout:
+                    size_hint_y: None
+                    height: dp(44)
+                    spacing: dp(6)
+                    ModernTextInput:
+                        id: search_pos
+                        hint_text: "Cari produk atau scan barcode..."
+                        on_text: app.refresh_pos_products(self.text)
+                    Button:
+                        text: "BARCODE"
+                        size_hint_x: None
+                        width: dp(95)
+                        background_normal: ""
+                        background_color: .10, .28, .55, 1
+                        color: 1, 1, 1, 1
+                        bold: True
+                        on_release: app.barcode_popup()
 
                 ScrollView:
                     do_scroll_y: False
@@ -707,6 +736,14 @@ KV = """
                         color: 1, 1, 1, 1
                         bold: True
                         on_release: app.stock_history_popup()
+
+                    Button:
+                        text: "Nilai Inventory"
+                        background_normal: ""
+                        background_color: .72, .42, .10, 1
+                        color: 1, 1, 1, 1
+                        bold: True
+                        on_release: app.inventory_popup()
 
                 Label:
                     text: "Kelola stok mencatat setiap stok masuk, keluar, dan koreksi."
@@ -1887,6 +1924,167 @@ class POSApp(App):
         close = Button(text="Tutup", size_hint_y=None, height=dp(44)); box.add_widget(close)
         popup = WhitePopup(title="Riwayat Pergerakan Stok", content=box, size_hint=(.94, None), height=dp(500))
         close.bind(on_release=popup.dismiss); popup.open()
+
+    def barcode_popup(self):
+        box = BoxLayout(orientation="vertical", padding=dp(10), spacing=dp(8))
+        box.add_widget(Label(
+            text="Masukkan atau scan barcode produk.",
+            size_hint_y=None, height=dp(34), halign="left"
+        ))
+        code = TextInput(
+            hint_text="Barcode", multiline=False,
+            size_hint_y=None, height=dp(46)
+        )
+        box.add_widget(code)
+        result = Label(
+            text="", size_hint_y=None, height=dp(44),
+            halign="left", valign="middle"
+        )
+        result.text_size = (None, None)
+        box.add_widget(result)
+        buttons = BoxLayout(size_hint_y=None, height=dp(46), spacing=dp(6))
+        add_btn = Button(text="TAMBAH KE KERANJANG")
+        close_btn = Button(text="Tutup")
+        buttons.add_widget(add_btn); buttons.add_widget(close_btn)
+        box.add_widget(buttons)
+        popup = WhitePopup(title="Barcode", content=box,
+                           size_hint=(.90, None), height=dp(270))
+
+        def add_barcode(*_):
+            value = code.text.strip()
+            if not value:
+                result.text = "Barcode belum diisi."
+                return
+            row = self.db.conn.execute(
+                "SELECT id,name,stock,sell_price,unit FROM products "
+                "WHERE barcode=? AND active=1", (value,)
+            ).fetchone()
+            if not row:
+                result.text = "Produk dengan barcode tersebut tidak ditemukan."
+                return
+            if float(row[2]) <= 0:
+                result.text = f"{row[1]}: stok habis."
+                return
+            self.add_to_cart(row[0])
+            result.text = f"Ditambahkan: {row[1]}"
+            self.refresh_pos_products("")
+
+        add_btn.bind(on_release=add_barcode)
+        close_btn.bind(on_release=popup.dismiss)
+        popup.open()
+        Clock.schedule_once(lambda dt: setattr(code, "focus", True), .15)
+
+    def finance_popup(self):
+        conn = self.db.conn
+        today = conn.execute("""
+            SELECT COUNT(*) transactions,
+                   COALESCE(SUM(total),0) sales,
+                   COALESCE(SUM(discount),0) discount,
+                   COALESCE(SUM(tax),0) tax
+            FROM sales
+            WHERE date(created_at)=date('now','localtime')
+        """).fetchone()
+        profit = conn.execute("""
+            SELECT COALESCE(SUM((si.price-si.cost_price)*si.qty),0) profit,
+                   COALESCE(SUM(si.cost_price*si.qty),0) cost
+            FROM sale_items si JOIN sales s ON s.id=si.sale_id
+            WHERE date(s.created_at)=date('now','localtime')
+        """).fetchone()
+        month = conn.execute("""
+            SELECT COALESCE(SUM(s.total),0) sales,
+                   COALESCE(SUM((si.price-si.cost_price)*si.qty),0) profit
+            FROM sales s JOIN sale_items si ON si.sale_id=s.id
+            WHERE date(s.created_at)>=date('now','localtime','-29 day')
+        """).fetchone()
+        payments = conn.execute("""
+            SELECT payment_method, COUNT(*) transactions, COALESCE(SUM(total),0) total
+            FROM sales WHERE date(created_at)=date('now','localtime')
+            GROUP BY payment_method ORDER BY total DESC
+        """).fetchall()
+
+        box = BoxLayout(orientation="vertical", padding=dp(10), spacing=dp(6))
+        box.add_widget(Label(
+            text=f"Hari ini\nPenjualan: {self.money(today['sales'])}\n"
+                 f"Transaksi: {today['transactions']}\n"
+                 f"Modal terjual: {self.money(profit['cost'])}\n"
+                 f"Laba kotor: {self.money(profit['profit'])}\n"
+                 f"Diskon: {self.money(today['discount'])}   Pajak: {self.money(today['tax'])}",
+            size_hint_y=None, height=dp(145), halign="left", valign="middle"
+        ))
+        box.add_widget(Label(
+            text=f"30 hari\nPenjualan: {self.money(month['sales'])}\n"
+                 f"Laba kotor: {self.money(month['profit'])}",
+            size_hint_y=None, height=dp(75), halign="left", valign="middle"
+        ))
+        box.add_widget(Label(text="Metode Pembayaran", size_hint_y=None,
+                             height=dp(28), bold=True, halign="left"))
+        scroll = ScrollView(do_scroll_x=False)
+        grid = GridLayout(cols=1, spacing=dp(4), size_hint_y=None)
+        grid.bind(minimum_height=grid.setter("height"))
+        if payments:
+            for r in payments:
+                grid.add_widget(Label(
+                    text=f"{r['payment_method']} | {r['transactions']} transaksi | {self.money(r['total'])}",
+                    size_hint_y=None, height=dp(30), halign="left"
+                ))
+        else:
+            grid.add_widget(Label(text="Belum ada transaksi hari ini.",
+                                  size_hint_y=None, height=dp(30), halign="left"))
+        scroll.add_widget(grid); box.add_widget(scroll)
+        close = Button(text="Tutup", size_hint_y=None, height=dp(44))
+        box.add_widget(close)
+        popup = WhitePopup(title="Ringkasan Keuangan", content=box,
+                           size_hint=(.94, None), height=dp(430))
+        close.bind(on_release=popup.dismiss)
+        popup.open()
+
+    def inventory_popup(self):
+        conn = self.db.conn
+        totals = conn.execute("""
+            SELECT COUNT(*) products,
+                   COALESCE(SUM(stock*buy_price),0) cost_value,
+                   COALESCE(SUM(stock*sell_price),0) retail_value,
+                   COALESCE(SUM(CASE WHEN stock<=min_stock THEN 1 ELSE 0 END),0) low,
+                   COALESCE(SUM(CASE WHEN stock<=0 THEN 1 ELSE 0 END),0) out_count
+            FROM products WHERE active=1
+        """).fetchone()
+        rows = conn.execute("""
+            SELECT name, barcode, stock, min_stock, unit, buy_price, sell_price
+            FROM products WHERE active=1 AND stock<=min_stock
+            ORDER BY stock ASC, name LIMIT 30
+        """).fetchall()
+        box = BoxLayout(orientation="vertical", padding=dp(10), spacing=dp(6))
+        box.add_widget(Label(
+            text=f"Produk aktif: {totals['products']}\n"
+                 f"Nilai modal stok: {self.money(totals['cost_value'])}\n"
+                 f"Nilai jual stok: {self.money(totals['retail_value'])}\n"
+                 f"Potensi margin: {self.money(totals['retail_value']-totals['cost_value'])}\n"
+                 f"Stok menipis: {totals['low']} | Habis: {totals['out_count']}",
+            size_hint_y=None, height=dp(125), halign="left", valign="middle"
+        ))
+        box.add_widget(Label(text="Stok Perlu Perhatian", size_hint_y=None,
+                             height=dp(28), bold=True, halign="left"))
+        scroll = ScrollView(do_scroll_x=False)
+        grid = GridLayout(cols=1, spacing=dp(4), size_hint_y=None)
+        grid.bind(minimum_height=grid.setter("height"))
+        if rows:
+            for r in rows:
+                status = "HABIS" if float(r['stock']) <= 0 else "MENIPIS"
+                grid.add_widget(Label(
+                    text=f"[{status}] {r['name']} | {r['stock']:g} {r['unit']} / min {r['min_stock']:g}\n"
+                         f"Barcode: {r['barcode'] or '-'} | Modal {self.money(r['buy_price'])} | Jual {self.money(r['sell_price'])}",
+                    size_hint_y=None, height=dp(54), halign="left", valign="middle"
+                ))
+        else:
+            grid.add_widget(Label(text="Tidak ada stok yang perlu perhatian.",
+                                  size_hint_y=None, height=dp(32), halign="left"))
+        scroll.add_widget(grid); box.add_widget(scroll)
+        close = Button(text="Tutup", size_hint_y=None, height=dp(44))
+        box.add_widget(close)
+        popup = WhitePopup(title="Smart Inventory", content=box,
+                           size_hint=(.95, None), height=dp(470))
+        close.bind(on_release=popup.dismiss)
+        popup.open()
 
     def category_form(self):
         box = BoxLayout(orientation="vertical", padding=dp(8), spacing=dp(8))
