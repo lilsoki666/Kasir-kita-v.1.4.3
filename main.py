@@ -811,42 +811,61 @@ KV = """
                         bold: True
                         on_release: app.product_form()
 
-                BoxLayout:
+                # Toolbar tindakan produk dibuat horizontal-scroll agar tidak
+                # meluber di layar HP yang sempit. Semua tombol tetap satu baris.
+                ScrollView:
                     size_hint_y: None
-                    height: dp(42)
-                    spacing: dp(6)
+                    height: dp(46)
+                    do_scroll_x: True
+                    do_scroll_y: False
+                    bar_width: dp(3)
+                    scroll_type: ["bars", "content"]
+                    BoxLayout:
+                        size_hint_x: None
+                        width: self.minimum_width
+                        size_hint_y: None
+                        height: dp(42)
+                        spacing: dp(6)
 
-                    Button:
-                        text: "+ Tambah Kategori"
-                        background_normal: ""
-                        background_color: .88, .91, .95, 1
-                        color: .08, .11, .16, 1
-                        bold: True
-                        on_release: app.category_form()
+                        Button:
+                            text: "+ Kategori"
+                            size_hint_x: None
+                            width: dp(125)
+                            background_normal: ""
+                            background_color: .88, .91, .95, 1
+                            color: .08, .11, .16, 1
+                            bold: True
+                            on_release: app.category_form()
 
-                    Button:
-                        text: "Kelola Kategori"
-                        background_normal: ""
-                        background_color: .82, .90, 1, 1
-                        color: .10, .28, .55, 1
-                        bold: True
-                        on_release: app.category_manager_popup()
+                        Button:
+                            text: "Kelola Kategori"
+                            size_hint_x: None
+                            width: dp(145)
+                            background_normal: ""
+                            background_color: .82, .90, 1, 1
+                            color: .10, .28, .55, 1
+                            bold: True
+                            on_release: app.category_manager_popup()
 
-                    Button:
-                        text: "Riwayat Stok"
-                        background_normal: ""
-                        background_color: .10, .14, .20, 1
-                        color: 1, 1, 1, 1
-                        bold: True
-                        on_release: app.stock_history_popup()
+                        Button:
+                            text: "Riwayat Stok"
+                            size_hint_x: None
+                            width: dp(125)
+                            background_normal: ""
+                            background_color: .10, .14, .20, 1
+                            color: 1, 1, 1, 1
+                            bold: True
+                            on_release: app.stock_history_popup()
 
-                    Button:
-                        text: "Nilai Inventory"
-                        background_normal: ""
-                        background_color: .72, .42, .10, 1
-                        color: 1, 1, 1, 1
-                        bold: True
-                        on_release: app.inventory_popup()
+                        Button:
+                            text: "Nilai Inventory"
+                            size_hint_x: None
+                            width: dp(145)
+                            background_normal: ""
+                            background_color: .72, .42, .10, 1
+                            color: 1, 1, 1, 1
+                            bold: True
+                            on_release: app.inventory_popup()
 
                 Label:
                     text: "Kelola stok mencatat setiap stok masuk, keluar, dan koreksi."
