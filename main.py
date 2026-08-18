@@ -1,4 +1,4 @@
-__version__ = "4.9.0-adaptive-orientation"
+__version__ = "4.9.1-adaptive-orientation-list-fixed"
 
 import csv
 import os
@@ -746,6 +746,8 @@ KV = """
                         id: product_grid
                         cols: 1
                         spacing: dp(6)
+                        size_hint_x: 1
+                        width: self.parent.width
                         size_hint_y: None
                         height: self.minimum_height
 
@@ -884,6 +886,8 @@ KV = """
                         id: products_grid
                         cols: 1
                         spacing: dp(6)
+                        size_hint_x: 1
+                        width: self.parent.width
                         size_hint_y: None
                         height: self.minimum_height
 
@@ -1549,7 +1553,7 @@ class POSApp(App):
             stock_text = "JASA" if is_service else f"Stok {float(p['stock']):g} {p['unit']}"
             btn = Button(
                 text=f"{p['name']}\n{self.money(p['sell_price'])}  |  {stock_text}",
-                size_hint_y=None, height=dp(60),
+                size_hint_x=1, size_hint_y=None, height=dp(60),
                 background_normal="",
                 background_color=(1, 1, 1, 1),
                 color=(.08, .10, .14, 1),
@@ -2480,7 +2484,7 @@ class POSApp(App):
         for p in self._v48_products(search):
             is_service = self._is_service_product(p)
             stock_text = "Jasa â€¢ tanpa stok" if is_service else f"Stok {float(p['stock']):g} {p['unit']}"
-            row = BoxLayout(size_hint_y=None, height=dp(62), spacing=dp(4))
+            row = BoxLayout(size_hint_x=1, size_hint_y=None, height=dp(62), spacing=dp(4))
             row.add_widget(Label(
                 text=f"{p['name']} | {p['barcode'] or '-'}\n"
                      f"{('JASA' if is_service else 'BARANG')} â€¢ Jual {self.money(p['sell_price'])} | {stock_text}",
