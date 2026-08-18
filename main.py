@@ -1,4 +1,4 @@
-__version__ = "4.8.0-universal-business"
+__version__ = "4.9.0-adaptive-orientation"
 
 import csv
 import os
@@ -12,6 +12,7 @@ from kivy.app import App
 from kivy.clock import Clock
 from kivy.lang import Builder
 from kivy.metrics import dp
+from kivy.core.window import Window
 from kivy.properties import StringProperty
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.button import Button
@@ -379,7 +380,7 @@ KV = """
             text_size: self.size
 
         Label:
-            text: "v" + app.version
+            text: "v" + app.version + ("  â€¢  LANDSCAPE" if app.is_landscape else "")
             size_hint_x: None
             width: dp(50)
             font_size: "11sp"
@@ -430,10 +431,11 @@ KV = """
                             text_size: self.size
 
                     GridLayout:
-                        cols: 2
+                        # Portrait: 2 columns. Landscape/tablet: 4 columns.
+                        cols: 4 if self.width >= dp(700) else 2
                         spacing: dp(8)
                         size_hint_y: None
-                        height: dp(170)
+                        height: dp(92) if self.width >= dp(700) else dp(170)
 
                         CardBox:
                             orientation: "vertical"
@@ -529,7 +531,7 @@ KV = """
                         text: "Ringkasan Penjualan"
 
                     GridLayout:
-                        cols: 3
+                        cols: 6 if self.width >= dp(700) else 3
                         spacing: dp(8)
                         size_hint_y: None
                         height: dp(76)
@@ -1173,6 +1175,27 @@ class RootLayout(BoxLayout):
 class POSApp(App):
     version = __version__
     store_name = StringProperty("TOKO SAYA")
+    is_landscape = False
+
+    def _set_android_orientation_to_system(self):
+        """Let Android choose orientation according to its current setting."""
+        if platform.system() == "Linux" and "ANDROID_ARGUMENT" in os.environ:
+            try:
+                from jnius import autoclass
+                PythonActivity = autoclass("org.kivy.android.PythonActivity")
+                ActivityInfo = autoclass("android.content.pm.ActivityInfo")
+                PythonActivity.mActivity.setRequestedOrientation(
+                    ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+                )
+            except Exception as exc:
+                print("Adaptive orientation Android gagal:", exc)
+
+    def _on_window_resize(self, _window, size):
+        try:
+            self.is_landscape = float(size[0]) > float(size[1])
+        except Exception:
+            self.is_landscape = False
+
     store_address = StringProperty("")
     tax_percent = StringProperty("0")
     cashier_name = StringProperty("Admin")
@@ -1195,6 +1218,9 @@ class POSApp(App):
 
     def on_start(self):
         try:
+            Window.bind(size=self._on_window_resize)
+            self._on_window_resize(Window, Window.size)
+            Clock.schedule_once(lambda dt: self._set_android_orientation_to_system(), 0.35)
             # AUTO REQUEST PERMISSION SAAT APLIKASI PERTAMA DI BUKA
             self.request_android_permissions()
             self.refresh_all()
