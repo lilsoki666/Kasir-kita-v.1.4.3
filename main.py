@@ -1199,6 +1199,42 @@ class POSApp(App):
             self.is_landscape = float(size[0]) > float(size[1])
         except Exception:
             self.is_landscape = False
+        # Android can resize the window before the ScreenManager/ScrollView
+        # has completed its next layout pass. Rebuild the two product lists
+        # after that pass so their children receive the new width/height.
+        if hasattr(self, "_adaptive_refresh_trigger"):
+            self._adaptive_refresh_trigger()
+
+    def _adaptive_refresh_lists(self, *_):
+        try:
+            if not getattr(self, "root", None):
+                return
+            # Force the list containers to use the current viewport width.
+            for grid_id in ("product_grid", "products_grid"):
+                try:
+                    grid = self.root.ids[grid_id]
+                    grid.width = max(1, self.root.ids.sm.width - dp(24))
+                except Exception:
+                    pass
+            self.refresh_pos_categories()
+            self.refresh_pos_products(self.root.ids.search_pos.text if "search_pos" in self.root.ids else "")
+            self.refresh_products(self.root.ids.search_product.text if "search_product" in self.root.ids else "")
+        except Exception as exc:
+            print("Adaptive list refresh gagal:", exc)
+
+    def _schedule_adaptive_refresh(self):
+        # Triggered/debounced refresh prevents multiple rebuilds during one
+        # Android rotation animation.
+        if not hasattr(self, "_adaptive_refresh_event"):
+            self._adaptive_refresh_event = None
+
+        def trigger(*_):
+            if self._adaptive_refresh_event is not None:
+                self._adaptive_refresh_event.cancel()
+            self._adaptive_refresh_event = Clock.schedule_once(self._adaptive_refresh_lists, 0.12)
+
+        self._adaptive_refresh_trigger = trigger
+        trigger()
 
     store_address = StringProperty("")
     tax_percent = StringProperty("0")
@@ -1223,6 +1259,7 @@ class POSApp(App):
     def on_start(self):
         try:
             Window.bind(size=self._on_window_resize)
+            self._schedule_adaptive_refresh()
             self._on_window_resize(Window, Window.size)
             Clock.schedule_once(lambda dt: self._set_android_orientation_to_system(), 0.35)
             # AUTO REQUEST PERMISSION SAAT APLIKASI PERTAMA DI BUKA
@@ -1554,6 +1591,7 @@ class POSApp(App):
             btn = Button(
                 text=f"{p['name']}\n{self.money(p['sell_price'])}  |  {stock_text}",
                 size_hint_x=1, size_hint_y=None, height=dp(60),
+                width=max(1, grid.width),
                 background_normal="",
                 background_color=(1, 1, 1, 1),
                 color=(.08, .10, .14, 1),
@@ -2484,7 +2522,7 @@ class POSApp(App):
         for p in self._v48_products(search):
             is_service = self._is_service_product(p)
             stock_text = "Jasa â€¢ tanpa stok" if is_service else f"Stok {float(p['stock']):g} {p['unit']}"
-            row = BoxLayout(size_hint_x=1, size_hint_y=None, height=dp(62), spacing=dp(4))
+            row = BoxLayout(size_hint_x=1, size_hint_y=None, height=dp(62), spacing=dp(4), width=max(1, grid.width))
             row.add_widget(Label(
                 text=f"{p['name']} | {p['barcode'] or '-'}\n"
                      f"{('JASA' if is_service else 'BARANG')} â€¢ Jual {self.money(p['sell_price'])} | {stock_text}",
