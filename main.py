@@ -2592,7 +2592,15 @@ class POSApp(App):
             from android import activity
             resolver = activity.mActivity.getContentResolver()
             mime = resolver.getType(uri) or "image/jpeg"
-            ext = ".png" if "png" in str(mime).lower() else ".jpg"
+            mime_text = str(mime).lower()
+            if "png" in mime_text:
+                ext = ".png"
+            elif "webp" in mime_text:
+                ext = ".webp"
+            elif "jpeg" in mime_text or "jpg" in mime_text:
+                ext = ".jpg"
+            else:
+                ext = ".jpg"
             dest = os.path.join(self._product_image_dir(),
                                 "img_" + datetime.now().strftime("%Y%m%d%H%M%S%f") + ext)
             stream = resolver.openInputStream(uri)
@@ -2623,32 +2631,65 @@ class POSApp(App):
             return ""
 
     def _pick_product_image(self, preview=None, status_label=None):
+        """Open the real Android system image picker.
+
+        Do not use Kivy FileChooser on Android: it only exposes the app's
+        private filesystem and can appear empty (often showing only ../).
+        The native ACTION_GET_CONTENT picker works with Gallery/Photos and
+        Android's DocumentsUI without requiring broad storage permission.
+        """
         self._product_image_preview = preview
         self._product_image_status = status_label
-        if platform.system() == "Linux" and "ANDROID_ARGUMENT" in os.environ:
-            try:
-                from android import activity
-                from jnius import autoclass
-                Intent = autoclass("android.content.Intent")
-                self._image_picker_request = 49103
-                self._image_picker_bound = True
-                activity.bind(on_activity_result=self._on_product_image_result)
-                intent = Intent(Intent.ACTION_OPEN_DOCUMENT)
-                intent.addCategory(Intent.CATEGORY_OPENABLE)
-                intent.setType("image/*")
-                intent.setFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                activity.startActivityForResult(intent, self._image_picker_request)
-                return
-            except Exception as exc:
-                print("Android image picker gagal, memakai file chooser:", exc)
+
+        # Detect Android by importing the android bridge rather than relying
+        # on ANDROID_ARGUMENT, which is not guaranteed in every p4a build.
+        try:
+            from android import activity
+            from jnius import autoclass
+        except Exception:
+            # Desktop/testing environment only.
+            self._open_desktop_image_picker()
+            return
+
+        try:
+            Intent = autoclass("android.content.Intent")
+            self._image_picker_request = 49103
+
+            # Avoid duplicate callbacks if the button is tapped repeatedly.
+            if getattr(self, "_image_picker_bound", False):
                 try:
-                    from android import activity
-                    if getattr(self, "_image_picker_bound", False):
-                        activity.unbind(on_activity_result=self._on_product_image_result)
+                    activity.unbind(on_activity_result=self._on_product_image_result)
                 except Exception:
                     pass
-                self._image_picker_bound = False
-        self._open_desktop_image_picker()
+
+            activity.bind(on_activity_result=self._on_product_image_result)
+            self._image_picker_bound = True
+
+            # GET_CONTENT is broadly supported by Android Gallery/Photos and
+            # DocumentsUI. We copy the returned content:// URI immediately
+            # into app-private storage, so no permanent external-storage path
+            # is needed.
+            intent = Intent(Intent.ACTION_GET_CONTENT)
+            intent.addCategory(Intent.CATEGORY_OPENABLE)
+            intent.setType("image/*")
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+
+            activity.startActivityForResult(intent, self._image_picker_request)
+            self._set_product_image_status("Memilih foto...")
+            return
+        except Exception as exc:
+            print("Native Android image picker gagal:", exc)
+            try:
+                if getattr(self, "_image_picker_bound", False):
+                    activity.unbind(on_activity_result=self._on_product_image_result)
+            except Exception:
+                pass
+            self._image_picker_bound = False
+            self._set_product_image_status("Pemilih foto Android gagal dibuka.")
+            # IMPORTANT: do not open the Kivy file chooser on Android.
+            # That chooser is the source of the ../-only screen seen on the
+            # device. Desktop fallback remains available only outside Android.
+            return
 
     def _on_product_image_result(self, request_code, result_code, intent):
         if request_code != getattr(self, "_image_picker_request", -1):
@@ -2661,10 +2702,12 @@ class POSApp(App):
             pass
         self._image_picker_bound = False
         if result_code != -1 or intent is None:
+            self._set_product_image_status("Pemilihan foto dibatalkan.")
             return
         try:
             uri = intent.getData()
             if uri is None:
+                self._set_product_image_status("Foto tidak ditemukan.")
                 return
             path = self._copy_android_uri_to_file(uri)
             if path:
