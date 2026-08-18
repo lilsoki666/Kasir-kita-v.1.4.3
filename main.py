@@ -1,4 +1,4 @@
-__version__ = "4.9.1-adaptive-orientation-list-fixed"
+__version__ = "4.9.3-product-image"
 
 import csv
 import os
@@ -7,6 +7,7 @@ from datetime import datetime
 import traceback
 import time
 import textwrap
+import shutil
 
 from kivy.app import App
 from kivy.clock import Clock
@@ -21,6 +22,8 @@ from kivy.uix.widget import Widget
 from kivy.uix.behaviors import ButtonBehavior
 from kivy.graphics import Color, Line, Rectangle
 from kivy.uix.label import Label
+from kivy.uix.image import Image
+from kivy.uix.filechooser import FileChooserListView
 from kivy.uix.popup import Popup
 from kivy.uix.textinput import TextInput
 from kivy.uix.spinner import Spinner
@@ -218,6 +221,55 @@ class IconNavButton(ButtonBehavior, BoxLayout):
     def __init__(self, **kwargs):
         super().__init__(orientation="vertical", spacing=0, padding=(0, 2), **kwargs)
 
+
+
+
+class ProductCard(ButtonBehavior, BoxLayout):
+    """Touch-friendly product card with an optional thumbnail."""
+    def __init__(self, product_id=None, image_path="", **kwargs):
+        super().__init__(orientation="horizontal", spacing=dp(10), padding=dp(10), **kwargs)
+        self.product_id = product_id
+        self.size_hint_y = None
+        self.height = dp(78)
+        self._image_path = image_path or ""
+        self.bind(state=self._state_redraw)
+        self._build_card()
+
+    def _build_card(self):
+        self.clear_widgets()
+        thumb_box = BoxLayout(size_hint_x=None, width=dp(62), padding=(0, 0))
+        if self._image_path and os.path.exists(self._image_path):
+            thumb = Image(source=self._image_path, allow_stretch=True, keep_ratio=True)
+        else:
+            thumb = Label(text="FOTO", font_size="9sp", bold=True,
+                          color=(.45, .50, .58, 1), halign="center", valign="middle")
+            thumb.bind(size=lambda w, v: setattr(w, "text_size", v))
+        thumb_box.add_widget(thumb)
+        self.add_widget(thumb_box)
+
+        self.info_box = BoxLayout(orientation="vertical", spacing=dp(2))
+        self.name_label = Label(font_size="12sp", bold=True,
+                                color=(.08, .10, .14, 1), halign="left", valign="middle",
+                                text_size=(None, None))
+        self.detail_label = Label(font_size="10sp", color=(.35, .40, .48, 1),
+                                  halign="left", valign="middle", text_size=(None, None))
+        self.info_box.add_widget(self.name_label)
+        self.info_box.add_widget(self.detail_label)
+        self.add_widget(self.info_box)
+        self._state_redraw()
+
+    def set_product_text(self, name, detail):
+        self.name_label.text = str(name)
+        self.detail_label.text = str(detail)
+        self.name_label.bind(size=lambda w, v: setattr(w, "text_size", (max(1, v[0]), None)))
+        self.detail_label.bind(size=lambda w, v: setattr(w, "text_size", (max(1, v[0]), None)))
+
+    def _state_redraw(self, *args):
+        self.canvas.before.clear()
+        with self.canvas.before:
+            Color(0.94, 0.97, 0.99, 1) if self.state == "down" else Color(1, 1, 1, 1)
+            from kivy.graphics import RoundedRectangle
+            RoundedRectangle(pos=self.pos, size=self.size, radius=[dp(8)])
 
 KV = """
 #:import dp kivy.metrics.dp
@@ -1245,6 +1297,7 @@ class POSApp(App):
         self.title = "POS Kasir"
         self.db = Database(os.path.join(self.user_data_dir, "pos.db"))
         self.init_v46_schema()
+        self.init_product_image_schema()
         self.load_settings()
         self.cart = []
         self.pos_category = "Semua"
@@ -1588,22 +1641,12 @@ class POSApp(App):
         for p in products[:100]:
             is_service = self._is_service_product(p)
             stock_text = "JASA" if is_service else f"Stok {float(p['stock']):g} {p['unit']}"
-            btn = Button(
-                text=f"{p['name']}\n{self.money(p['sell_price'])}  |  {stock_text}",
-                size_hint_x=1, size_hint_y=None, height=dp(60),
-                width=max(1, grid.width),
-                background_normal="",
-                background_color=(1, 1, 1, 1),
-                color=(.08, .10, .14, 1),
-                font_size="13sp",
-                bold=True,
-                halign="left",
-                valign="middle",
-                padding=(dp(12), dp(6))
-            )
-            btn.bind(size=lambda instance, value: setattr(instance, 'text_size', (value[0] - dp(24), None)))
-            btn.bind(on_release=lambda b, pid=p["id"]: self.add_to_cart(pid))
-            grid.add_widget(btn)
+            card = ProductCard(product_id=p["id"], image_path=(p["image_path"] if "image_path" in p.keys() else ""))
+            card.set_product_text(p["name"], f"{self.money(p['sell_price'])}  |  {stock_text}")
+            card.width = max(1, grid.width)
+            card.bind(size=lambda instance, value: setattr(instance, "width", max(1, grid.width)))
+            card.bind(on_release=lambda b, pid=p["id"]: self.add_to_cart(pid))
+            grid.add_widget(card)
 
     def add_to_cart(self, product_id):
         p = self._v48_product_by_id(product_id)
@@ -2516,27 +2559,195 @@ class POSApp(App):
         box=BoxLayout(orientation='vertical',padding=dp(8)); box.add_widget(scroll)
         WhitePopup(title='AUDIT LOG',content=box,size_hint=(.94,.82)).open()
 
+    def init_product_image_schema(self):
+        """Add the optional product image path without changing existing data."""
+        try:
+            cols = [r[1] for r in self.db.conn.execute("PRAGMA table_info(products)").fetchall()]
+            if "image_path" not in cols:
+                self.db.conn.execute("ALTER TABLE products ADD COLUMN image_path TEXT DEFAULT ''")
+                self.db.conn.commit()
+        except Exception as exc:
+            print("Product image schema migration skipped:", exc)
+
+    def _product_image_dir(self):
+        path = os.path.join(self.user_data_dir, "product_images")
+        os.makedirs(path, exist_ok=True)
+        return path
+
+    def _copy_image_file(self, source_path, preferred_ext=".jpg"):
+        if not source_path or not os.path.isfile(source_path):
+            return ""
+        ext = os.path.splitext(source_path)[1].lower()
+        if ext not in (".jpg", ".jpeg", ".png", ".webp"):
+            ext = preferred_ext
+        dest = os.path.join(self._product_image_dir(),
+                            "img_" + datetime.now().strftime("%Y%m%d%H%M%S%f") + ext)
+        shutil.copy2(source_path, dest)
+        return dest
+
+    def _copy_android_uri_to_file(self, uri):
+        """Copy an Android content:// URI into app-private storage."""
+        try:
+            from jnius import autoclass, jarray
+            from android import activity
+            resolver = activity.mActivity.getContentResolver()
+            mime = resolver.getType(uri) or "image/jpeg"
+            ext = ".png" if "png" in str(mime).lower() else ".jpg"
+            dest = os.path.join(self._product_image_dir(),
+                                "img_" + datetime.now().strftime("%Y%m%d%H%M%S%f") + ext)
+            stream = resolver.openInputStream(uri)
+            if stream is None:
+                return ""
+            FileOutputStream = autoclass("java.io.FileOutputStream")
+            out = FileOutputStream(dest)
+            buf = jarray.zeros(8192, 'b')
+            try:
+                while True:
+                    n = stream.read(buf)
+                    if n is None or int(n) < 0:
+                        break
+                    if int(n) > 0:
+                        out.write(buf, 0, int(n))
+            finally:
+                try:
+                    stream.close()
+                except Exception:
+                    pass
+                try:
+                    out.close()
+                except Exception:
+                    pass
+            return dest if os.path.exists(dest) else ""
+        except Exception as exc:
+            print("Gagal menyalin foto Android:", exc)
+            return ""
+
+    def _pick_product_image(self, preview=None, status_label=None):
+        self._product_image_preview = preview
+        self._product_image_status = status_label
+        if platform.system() == "Linux" and "ANDROID_ARGUMENT" in os.environ:
+            try:
+                from android import activity
+                from jnius import autoclass
+                Intent = autoclass("android.content.Intent")
+                self._image_picker_request = 49103
+                self._image_picker_bound = True
+                activity.bind(on_activity_result=self._on_product_image_result)
+                intent = Intent(Intent.ACTION_OPEN_DOCUMENT)
+                intent.addCategory(Intent.CATEGORY_OPENABLE)
+                intent.setType("image/*")
+                intent.setFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                activity.startActivityForResult(intent, self._image_picker_request)
+                return
+            except Exception as exc:
+                print("Android image picker gagal, memakai file chooser:", exc)
+                try:
+                    from android import activity
+                    if getattr(self, "_image_picker_bound", False):
+                        activity.unbind(on_activity_result=self._on_product_image_result)
+                except Exception:
+                    pass
+                self._image_picker_bound = False
+        self._open_desktop_image_picker()
+
+    def _on_product_image_result(self, request_code, result_code, intent):
+        if request_code != getattr(self, "_image_picker_request", -1):
+            return
+        try:
+            from android import activity
+            if getattr(self, "_image_picker_bound", False):
+                activity.unbind(on_activity_result=self._on_product_image_result)
+        except Exception:
+            pass
+        self._image_picker_bound = False
+        if result_code != -1 or intent is None:
+            return
+        try:
+            uri = intent.getData()
+            if uri is None:
+                return
+            path = self._copy_android_uri_to_file(uri)
+            if path:
+                self._product_image_path = path
+                self._update_product_image_preview(path)
+            else:
+                self._set_product_image_status("Foto gagal disalin.")
+        except Exception as exc:
+            self._set_product_image_status("Foto tidak dapat digunakan.")
+            print("Hasil picker foto gagal:", exc)
+
+    def _open_desktop_image_picker(self):
+        chooser = FileChooserListView(path=os.path.expanduser("~"), filters=["*.png", "*.jpg", "*.jpeg", "*.webp"])
+        box = BoxLayout(orientation="vertical", spacing=dp(6), padding=dp(8))
+        box.add_widget(chooser)
+        actions = BoxLayout(size_hint_y=None, height=dp(44), spacing=dp(6))
+        cancel = Button(text="Batal")
+        choose = Button(text="Pilih Foto", background_normal="", background_color=(.04,.58,.30,1), color=(1,1,1,1), bold=True)
+        actions.add_widget(cancel); actions.add_widget(choose); box.add_widget(actions)
+        pop = WhitePopup(title="Pilih Foto Produk", content=box, size_hint=(.94,.86))
+        cancel.bind(on_release=pop.dismiss)
+        def use_file(*_):
+            if not chooser.selection:
+                self._set_product_image_status("Pilih file gambar terlebih dahulu.")
+                return
+            path = self._copy_image_file(chooser.selection[0])
+            if path:
+                self._product_image_path = path
+                self._update_product_image_preview(path)
+                pop.dismiss()
+        choose.bind(on_release=use_file)
+        pop.open()
+
+    def _update_product_image_preview(self, path):
+        if self._product_image_preview is not None:
+            try:
+                self._product_image_preview.clear_widgets()
+                self._product_image_preview.add_widget(Image(source=path, allow_stretch=True, keep_ratio=True))
+            except Exception:
+                pass
+        self._set_product_image_status("Foto produk siap disimpan.")
+
+    def _set_product_image_status(self, text):
+        if self._product_image_status is not None:
+            self._product_image_status.text = str(text)
+
+    def _remove_product_image(self):
+        self._product_image_path = ""
+        self._update_product_image_preview("")
+        if self._product_image_preview is not None:
+            self._product_image_preview.clear_widgets()
+            placeholder = Label(text="FOTO", font_size="11sp", bold=True,
+                                color=(.45,.50,.58,1), halign="center", valign="middle")
+            placeholder.bind(size=lambda w,v: setattr(w,"text_size",v))
+            self._product_image_preview.add_widget(placeholder)
+        self._set_product_image_status("Foto akan dihapus saat disimpan.")
+
     def refresh_products(self, search):
         grid = self.root.ids.products_grid
         grid.clear_widgets()
         for p in self._v48_products(search):
             is_service = self._is_service_product(p)
             stock_text = "Jasa â€¢ tanpa stok" if is_service else f"Stok {float(p['stock']):g} {p['unit']}"
-            row = BoxLayout(size_hint_x=1, size_hint_y=None, height=dp(62), spacing=dp(4), width=max(1, grid.width))
-            row.add_widget(Label(
+            row = BoxLayout(size_hint_x=1, size_hint_y=None, height=dp(78), spacing=dp(8), padding=dp(8), width=max(1, grid.width))
+            thumb_box = BoxLayout(size_hint_x=None, width=dp(58))
+            image_path = p["image_path"] if "image_path" in p.keys() else ""
+            if image_path and os.path.exists(image_path):
+                thumb_box.add_widget(Image(source=image_path, allow_stretch=True, keep_ratio=True))
+            else:
+                placeholder = Label(text="FOTO", font_size="8sp", bold=True, color=(.45,.50,.58,1), halign="center", valign="middle")
+                placeholder.bind(size=lambda w,v: setattr(w,"text_size",v)); thumb_box.add_widget(placeholder)
+            row.add_widget(thumb_box)
+            info = Label(
                 text=f"{p['name']} | {p['barcode'] or '-'}\n"
                      f"{('JASA' if is_service else 'BARANG')} â€¢ Jual {self.money(p['sell_price'])} | {stock_text}",
                 halign="left", valign="middle", color=(.08,.10,.14,1), font_size="10sp"
-            ))
+            )
+            info.bind(size=lambda w,v: setattr(w,"text_size",(max(1,v[0]),None)))
+            row.add_widget(info)
             stock = Button(text="Stok" if not is_service else "Info", size_hint_x=None, width=dp(58),
-                           background_normal="", background_color=(.88,.97,.91,1),
-                           color=(.05,.45,.22,1), bold=True)
-            edit = Button(text="Edit", size_hint_x=None, width=dp(60),
-                           background_normal="", background_color=(.88,.94,1,1),
-                           color=(.10,.28,.55,1), bold=True)
-            delete = Button(text="Hapus", size_hint_x=None, width=dp(60),
-                            background_normal="", background_color=(.98,.90,.90,1),
-                            color=(.72,.12,.12,1), bold=True)
+                           background_normal="", background_color=(.88,.97,.91,1), color=(.05,.45,.22,1), bold=True)
+            edit = Button(text="Edit", size_hint_x=None, width=dp(60), background_normal="", background_color=(.88,.94,1,1), color=(.10,.28,.55,1), bold=True)
+            delete = Button(text="Hapus", size_hint_x=None, width=dp(60), background_normal="", background_color=(.98,.90,.90,1), color=(.72,.12,.12,1), bold=True)
             if is_service:
                 stock.bind(on_release=lambda btn, pid=p["id"]: self.info("Item jasa tidak menggunakan stok.", "Jasa"))
             else:
@@ -2548,10 +2759,38 @@ class POSApp(App):
 
     def product_form(self, product_id=None):
         p = self._v48_product_by_id(product_id) if product_id else None
+        self._product_image_path = (p["image_path"] if p and "image_path" in p.keys() else "") or ""
+        self._product_image_preview = None
+        self._product_image_status = None
         box = BoxLayout(orientation="vertical", spacing=dp(6), padding=dp(8))
         scroll = ScrollView(do_scroll_x=False)
         inner = BoxLayout(orientation="vertical", spacing=dp(6), size_hint_y=None)
         inner.bind(minimum_height=inner.setter("height"))
+
+        # Foto produk
+        photo_wrap = BoxLayout(orientation="vertical", size_hint_y=None, height=dp(126), spacing=dp(5))
+        preview = BoxLayout(size_hint_y=None, height=dp(82), padding=dp(4))
+        self._product_image_preview = preview
+        if self._product_image_path and os.path.exists(self._product_image_path):
+            preview.add_widget(Image(source=self._product_image_path, allow_stretch=True, keep_ratio=True))
+        else:
+            placeholder = Label(text="FOTO PRODUK\nBelum ada foto", font_size="10sp", color=(.45,.50,.58,1), halign="center", valign="middle")
+            placeholder.bind(size=lambda w,v: setattr(w,"text_size",v)); preview.add_widget(placeholder)
+        photo_wrap.add_widget(preview)
+        photo_actions = BoxLayout(size_hint_y=None, height=dp(36), spacing=dp(5))
+        pick_btn = Button(text="+ Foto Produk", background_normal="", background_color=(.10,.28,.55,1), color=(1,1,1,1), bold=True)
+        remove_btn = Button(text="Hapus Foto", background_normal="", background_color=(.96,.90,.90,1), color=(.72,.12,.12,1), bold=True)
+        photo_actions.add_widget(pick_btn); photo_actions.add_widget(remove_btn)
+        photo_wrap.add_widget(photo_actions)
+        status = Label(text="Foto tersimpan di perangkat." if self._product_image_path else "Opsional â€” tambahkan foto produk.",
+                       size_hint_y=None, height=dp(18), font_size="9sp", color=(.35,.40,.48,1), halign="left", valign="middle")
+        status.bind(size=lambda w,v: setattr(w,"text_size",v))
+        photo_wrap.add_widget(status)
+        inner.add_widget(photo_wrap)
+        self._product_image_status = status
+        pick_btn.bind(on_release=lambda *_: self._pick_product_image(preview, status))
+        remove_btn.bind(on_release=lambda *_: self._remove_product_image())
+
         fields = {}
         for key, hint in [
             ("barcode", "Barcode / SKU (opsional)"),
@@ -2562,53 +2801,35 @@ class POSApp(App):
             ("unit", "Satuan (pcs, kg, jam, paket, dll.)"),
             ("min_stock", "Batas stok minimum"),
         ]:
-            t = TextInput(
-                hint_text=hint, multiline=False, size_hint_y=None, height=dp(40),
-                text="" if not p else str(p[key] if p[key] is not None else "")
-            )
+            t = TextInput(hint_text=hint, multiline=False, size_hint_y=None, height=dp(40),
+                          text="" if not p else str(p[key] if p[key] is not None else ""))
             fields[key] = t; inner.add_widget(t)
 
         item_type = ((p["item_type"] if "item_type" in p.keys() else "BARANG") if p else "BARANG").upper()
-        type_spinner = Spinner(text="Jasa" if item_type == "JASA" else "Barang",
-                               values=("Barang", "Jasa"), size_hint_y=None, height=dp(40))
-        inner.add_widget(Label(text="Tipe item", size_hint_y=None, height=dp(22), halign="left",
-                               color=(.20,.24,.30,1), bold=True, font_size="11sp"))
+        type_spinner = Spinner(text="Jasa" if item_type == "JASA" else "Barang", values=("Barang", "Jasa"), size_hint_y=None, height=dp(40))
+        inner.add_widget(Label(text="Tipe item", size_hint_y=None, height=dp(22), halign="left", color=(.20,.24,.30,1), bold=True, font_size="11sp"))
         inner.add_widget(type_spinner)
-
-        categories = self.db.categories()
-        cat_names = [str(c["name"]) for c in categories]
+        categories = self.db.categories(); cat_names = [str(c["name"]) for c in categories]
         current_cat = cat_names[0] if cat_names else ""
         if p and p["category_id"]:
             for c in categories:
-                if c["id"] == p["category_id"]:
-                    current_cat = c["name"]; break
-        inner.add_widget(Label(text="Kategori", size_hint_y=None, height=dp(22), halign="left",
-                               color=(.20,.24,.30,1), bold=True, font_size="11sp"))
-        cat_spinner = Spinner(text=current_cat or "Belum ada kategori",
-                              values=cat_names or ["Belum ada kategori"], size_hint_y=None, height=dp(40))
+                if c["id"] == p["category_id"]: current_cat = c["name"]; break
+        inner.add_widget(Label(text="Kategori", size_hint_y=None, height=dp(22), halign="left", color=(.20,.24,.30,1), bold=True, font_size="11sp"))
+        cat_spinner = Spinner(text=current_cat or "Belum ada kategori", values=cat_names or ["Belum ada kategori"], size_hint_y=None, height=dp(40))
         inner.add_widget(cat_spinner)
-
-        hint = Label(text="Barang memakai stok. Jasa tidak mengurangi stok saat terjual.",
-                     size_hint_y=None, height=dp(38), font_size="10sp", color=(.35,.40,.48,1),
-                     halign="left", valign="middle")
-        hint.bind(size=lambda w,v: setattr(w,"text_size",v))
-        inner.add_widget(hint)
+        hint = Label(text="Barang memakai stok. Jasa tidak mengurangi stok saat terjual.", size_hint_y=None, height=dp(38), font_size="10sp", color=(.35,.40,.48,1), halign="left", valign="middle")
+        hint.bind(size=lambda w,v: setattr(w,"text_size",v)); inner.add_widget(hint)
         scroll.add_widget(inner); box.add_widget(scroll)
-        save = Button(text="Simpan", size_hint_y=None, height=dp(44),
-                      background_normal="", background_color=(.04,.58,.30,1), color=(1,1,1,1), bold=True)
+        save = Button(text="Simpan", size_hint_y=None, height=dp(44), background_normal="", background_color=(.04,.58,.30,1), color=(1,1,1,1), bold=True)
         box.add_widget(save)
-        popup = WhitePopup(title="Barang / Jasa", content=box, size_hint=(.92,.88))
+        popup = WhitePopup(title="Barang / Jasa", content=box, size_hint=(.92,.90))
 
         def sync_type(*_):
             is_service = type_spinner.text == "Jasa"
-            fields["stock"].disabled = is_service
-            fields["min_stock"].disabled = is_service
+            fields["stock"].disabled = is_service; fields["min_stock"].disabled = is_service
             if is_service:
-                fields["stock"].text = "0"
-                fields["min_stock"].text = "0"
-                fields["unit"].text = fields["unit"].text or "jasa"
-            elif fields["unit"].text == "jasa":
-                fields["unit"].text = "pcs"
+                fields["stock"].text = "0"; fields["min_stock"].text = "0"; fields["unit"].text = fields["unit"].text or "jasa"
+            elif fields["unit"].text == "jasa": fields["unit"].text = "pcs"
         type_spinner.bind(text=sync_type); sync_type()
 
         def save_it(*_):
@@ -2616,24 +2837,19 @@ class POSApp(App):
                 if not categories: raise ValueError("Buat kategori terlebih dahulu.")
                 cat = next(c for c in categories if c["name"] == cat_spinner.text)
                 is_service = type_spinner.text == "Jasa"
-                data = {
-                    "id": product_id, "barcode": fields["barcode"].text.strip(),
-                    "name": fields["name"].text.strip(), "category_id": cat["id"],
-                    "buy_price": float(fields["buy_price"].text or 0),
-                    "sell_price": float(fields["sell_price"].text or 0),
-                    "stock": 0.0 if is_service else float(fields["stock"].text or 0),
-                    "unit": fields["unit"].text.strip() or ("jasa" if is_service else "pcs"),
-                    "min_stock": 0.0 if is_service else float(fields["min_stock"].text or 0),
-                }
-                if not data["name"] or data["sell_price"] < 0: raise ValueError
+                data = {"id": product_id, "barcode": fields["barcode"].text.strip(), "name": fields["name"].text.strip(), "category_id": cat["id"],
+                        "buy_price": float(fields["buy_price"].text or 0), "sell_price": float(fields["sell_price"].text or 0),
+                        "stock": 0.0 if is_service else float(fields["stock"].text or 0), "unit": fields["unit"].text.strip() or ("jasa" if is_service else "pcs"),
+                        "min_stock": 0.0 if is_service else float(fields["min_stock"].text or 0)}
+                if not data["name"] or data["sell_price"] < 0: raise ValueError("Nama produk dan harga jual harus valid.")
                 self.db.save_product(data)
                 row = self.db.conn.execute("SELECT id FROM products WHERE barcode=? ORDER BY id DESC LIMIT 1", (data["barcode"],)).fetchone() if data["barcode"] else None
                 if not row:
                     row = self.db.conn.execute("SELECT id FROM products WHERE name=? AND category_id=? ORDER BY id DESC LIMIT 1", (data["name"], data["category_id"])).fetchone()
                 saved_id = product_id or (row["id"] if row else None)
                 if saved_id:
-                    self.db.conn.execute("UPDATE products SET item_type=?, track_stock=? WHERE id=?",
-                                         ("JASA" if is_service else "BARANG", 0 if is_service else 1, saved_id))
+                    self.db.conn.execute("UPDATE products SET item_type=?, track_stock=?, image_path=? WHERE id=?",
+                                         ("JASA" if is_service else "BARANG", 0 if is_service else 1, self._product_image_path or "", saved_id))
                     self.db.conn.commit()
                 self._audit("SAVE_ITEM", f"{data['name']} | {'JASA' if is_service else 'BARANG'}")
                 popup.dismiss(); self.refresh_all()
