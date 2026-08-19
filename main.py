@@ -1,4 +1,4 @@
-__version__ = "4.9.5-product-image-picker"
+__version__ = "4.9.6-product-image-picker"
 
 import csv
 import os
@@ -2631,13 +2631,14 @@ class POSApp(App):
             return ""
 
     def _pick_product_image(self, preview=None, status_label=None):
-        """Open Android's native photo picker/document picker.
+        """Open a real Android image picker using ACTION_PICK first.
 
-        Uses the Activity itself for startActivityForResult instead of the
-        convenience android.activity.startActivityForResult wrapper. This is
-        more reliable across python-for-android/Kivy Android versions.
-        Android 13+ gets the native Photo Picker first; older Android versions
-        fall back to ACTION_OPEN_DOCUMENT.
+        ACTION_PICK against MediaStore.Images is intentionally used here
+        because it is supported on a wider range of Android 10+ devices than
+        the newer Android 13 Photo Picker action. If the device does not expose
+        a gallery activity, fall back to ACTION_GET_CONTENT and then
+        ACTION_OPEN_DOCUMENT. The returned content:// URI is copied into the
+        app-private product_images directory by _on_product_image_result().
         """
         self._product_image_preview = preview
         self._product_image_status = status_label
@@ -2645,48 +2646,63 @@ class POSApp(App):
         try:
             from android import activity
             from jnius import autoclass
-        except Exception:
-            self._open_desktop_image_picker()
+        except Exception as exc:
+            print("Android picker import gagal:", exc)
+            self._set_product_image_status("Fitur galeri Android tidak tersedia.")
+            return
+
+        self._image_picker_request = 49103
+
+        # Keep only one result callback registered.
+        if getattr(self, "_image_picker_bound", False):
+            try:
+                activity.unbind(on_activity_result=self._on_product_image_result)
+            except Exception:
+                pass
+            self._image_picker_bound = False
+
+        try:
+            activity.bind(on_activity_result=self._on_product_image_result)
+            self._image_picker_bound = True
+        except Exception as exc:
+            print("Bind Android activity result gagal:", exc)
+            self._set_product_image_status("Galeri Android gagal disiapkan.")
             return
 
         try:
-            PythonActivity = autoclass("org.kivy.android.PythonActivity")
             Intent = autoclass("android.content.Intent")
-            Build = autoclass("android.os.Build")
+            MediaStoreImages = autoclass("android.provider.MediaStore$Images$Media")
 
-            self._image_picker_request = 49103
+            # 1) Most compatible route: Android Gallery/Photos via ACTION_PICK.
+            intent = Intent(Intent.ACTION_PICK)
+            intent.setDataAndType(MediaStoreImages.EXTERNAL_CONTENT_URI, "image/*")
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
 
-            if getattr(self, "_image_picker_bound", False):
-                try:
-                    activity.unbind(on_activity_result=self._on_product_image_result)
-                except Exception:
-                    pass
+            try:
+                activity.startActivityForResult(intent, self._image_picker_request)
+            except Exception as first_exc:
+                print("ACTION_PICK gagal:", first_exc)
 
-            activity.bind(on_activity_result=self._on_product_image_result)
-            self._image_picker_bound = True
-
-            # Prefer Android 13+ Photo Picker. It requires no storage
-            # permission and is specifically designed for selecting photos.
-            sdk = int(Build.VERSION.SDK_INT)
-            if sdk >= 33:
-                intent = Intent("android.provider.action.PICK_IMAGES")
-                intent.setType("image/*")
-            else:
-                # ACTION_OPEN_DOCUMENT is broadly supported on Android 10-12
-                # and opens the system DocumentsUI/Gallery providers.
-                intent = Intent(Intent.ACTION_OPEN_DOCUMENT)
+                # 2) Generic Android content picker.
+                intent = Intent(Intent.ACTION_GET_CONTENT)
                 intent.addCategory(Intent.CATEGORY_OPENABLE)
                 intent.setType("image/*")
                 intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                try:
+                    activity.startActivityForResult(intent, self._image_picker_request)
+                except Exception as second_exc:
+                    print("ACTION_GET_CONTENT gagal:", second_exc)
 
-            # Start from the actual Kivy Activity. Some p4a releases do not
-            # reliably expose the wrapper's startActivityForResult method.
-            PythonActivity.mActivity.startActivityForResult(
-                intent, self._image_picker_request
-            )
+                    # 3) DocumentsUI fallback.
+                    intent = Intent(Intent.ACTION_OPEN_DOCUMENT)
+                    intent.addCategory(Intent.CATEGORY_OPENABLE)
+                    intent.setType("image/*")
+                    intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    activity.startActivityForResult(intent, self._image_picker_request)
+
             self._set_product_image_status("Memilih foto...")
         except Exception as exc:
-            print("Native Android photo picker gagal dibuka:", exc)
+            print("Semua Android image picker gagal:", exc)
             try:
                 if getattr(self, "_image_picker_bound", False):
                     activity.unbind(on_activity_result=self._on_product_image_result)
@@ -2694,8 +2710,9 @@ class POSApp(App):
                 pass
             self._image_picker_bound = False
             self._set_product_image_status(
-                "Galeri Android tidak dapat dibuka. Coba tekan + Foto Produk lagi."
+                "Galeri Android gagal dibuka. Pastikan aplikasi Galeri/Foto tersedia."
             )
+
 
     def _on_product_image_result(self, request_code, result_code, intent):
         if request_code != getattr(self, "_image_picker_request", -1):
