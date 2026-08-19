@@ -17,7 +17,7 @@ source.exclude_dirs = .git,.github,.buildozer,bin,__pycache__
 # ==========================================
 # VERSION
 # ==========================================
-version = 1.4.1
+version = 4.9.8
 
 # ==========================================
 # PYTHON / KIVY
