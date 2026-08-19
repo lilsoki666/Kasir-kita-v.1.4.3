@@ -432,7 +432,7 @@ KV = """
             text_size: self.size
 
         Label:
-            text: "v" + app.version + ("  â€¢  LANDSCAPE" if app.is_landscape else "")
+            text: "v" + app.version + ("  Ã¢â‚¬Â¢  LANDSCAPE" if app.is_landscape else "")
             size_hint_x: None
             width: dp(50)
             font_size: "11sp"
@@ -1476,7 +1476,7 @@ class POSApp(App):
                 if sh:
                     opening, sales, cin, cout = self._cash_summary(sh['id'])
                     expected = opening + sales + cin - cout
-                    self.root.ids.dash_shift_status.text = f"Shift aktif â€¢ Kas {self.money(expected)}"
+                    self.root.ids.dash_shift_status.text = f"Shift aktif Ã¢â‚¬Â¢ Kas {self.money(expected)}"
                     self.root.ids.dash_shift_status.color = (.05, .45, .25, 1)
                 else:
                     self.root.ids.dash_shift_status.text = "Shift belum dibuka"
@@ -2276,14 +2276,14 @@ class POSApp(App):
         header = CardBox(orientation='vertical', size_hint_y=None, height=dp(82), padding=dp(12), spacing=dp(3))
         header.add_widget(Label(text='Pusat Operasional Toko', size_hint_y=None, height=dp(28),
                                 font_size='16sp', bold=True, color=(.08,.12,.18,1), halign='left'))
-        header.add_widget(Label(text=f"{user.get('username', self.cashier_name)}  â€¢  {user.get('role', 'Kasir')}",
+        header.add_widget(Label(text=f"{user.get('username', self.cashier_name)}  Ã¢â‚¬Â¢  {user.get('role', 'Kasir')}",
                                 size_hint_y=None, height=dp(20), font_size='11sp', color=(.35,.40,.48,1), halign='left'))
         if sh:
             opening, sales, cin, cout = self._cash_summary(sh['id'])
             expected = opening + sales + cin - cout
-            chip_text = f"SHIFT AKTIF  â€¢  Kas {self.money(expected)}"
+            chip_text = f"SHIFT AKTIF  Ã¢â‚¬Â¢  Kas {self.money(expected)}"
         else:
-            chip_text = "SHIFT BELUM DIBUKA  â€¢  Buka shift sebelum transaksi tunai"
+            chip_text = "SHIFT BELUM DIBUKA  Ã¢â‚¬Â¢  Buka shift sebelum transaksi tunai"
         chip = StatusChip(text=chip_text)
         chip.color = (.05,.45,.25,1) if sh else (.65,.35,.05,1)
         header.add_widget(chip)
@@ -2554,7 +2554,7 @@ class POSApp(App):
         grid=GridLayout(cols=1,spacing=dp(3),size_hint_y=None); grid.bind(minimum_height=grid.setter('height'))
         if not rows: grid.add_widget(Label(text='Belum ada aktivitas.',size_hint_y=None,height=dp(34)))
         for r in rows:
-            grid.add_widget(Label(text=f"{r['created_at']} | {r['username']}\n{r['action']} â€” {r['detail']}",size_hint_y=None,height=dp(52),halign='left',valign='middle',text_size=(None,None),font_size='10sp'))
+            grid.add_widget(Label(text=f"{r['created_at']} | {r['username']}\n{r['action']} Ã¢â‚¬â€ {r['detail']}",size_hint_y=None,height=dp(52),halign='left',valign='middle',text_size=(None,None),font_size='10sp'))
         scroll=ScrollView(do_scroll_x=False); scroll.add_widget(grid)
         box=BoxLayout(orientation='vertical',padding=dp(8)); box.add_widget(scroll)
         WhitePopup(title='AUDIT LOG',content=box,size_hint=(.94,.82)).open()
@@ -2631,18 +2631,16 @@ class POSApp(App):
             return ""
 
     def _pick_product_image(self, preview=None, status_label=None):
-        """Open the Android system photo picker reliably.
+        """Open Android's system image picker without changing POS/database logic.
 
-        Important: ``android.activity`` is used only for the activity-result
-        callback.  The actual Android Activity must be obtained from
-        ``org.kivy.android.PythonActivity`` and ``startActivityForResult``
-        must be called on that Java Activity object.  Calling
-        ``activity.startActivityForResult`` directly is unreliable on many
-        Android/Kivy builds and was the reason the previous picker never
-        reached the Gallery application.
+        Uses the Android Photo Picker on API 33+ and falls back to
+        ACTION_OPEN_DOCUMENT / ACTION_GET_CONTENT on older Android versions.
+        The picker is launched directly (no chooser) to avoid OEM chooser
+        failures seen on some phones.
         """
         self._product_image_preview = preview
         self._product_image_status = status_label
+        self._image_picker_request = 49104
 
         try:
             from android import activity
@@ -2650,73 +2648,66 @@ class POSApp(App):
             PythonActivity = autoclass("org.kivy.android.PythonActivity")
             Intent = autoclass("android.content.Intent")
         except Exception as exc:
-            print("Android photo picker import gagal:", exc)
+            print("Android photo picker import gagal:", repr(exc))
             self._set_product_image_status("Pemilih foto Android tidak tersedia pada APK ini.")
             return
 
-        self._image_picker_request = 49104
-        self._image_picker_bound = False
-
+        # Avoid duplicate callbacks if the button is pressed twice.
         try:
-            activity.unbind(on_activity_result=self._on_product_image_result)
+            if getattr(self, "_image_picker_bound", False):
+                activity.unbind(on_activity_result=self._on_product_image_result)
         except Exception:
             pass
+        self._image_picker_bound = False
 
         try:
             activity.bind(on_activity_result=self._on_product_image_result)
             self._image_picker_bound = True
         except Exception as exc:
-            print("Bind activity result gagal:", exc)
+            print("Bind activity result gagal:", repr(exc))
             self._set_product_image_status("Pemilih foto gagal disiapkan.")
             return
 
-        android_activity = PythonActivity.mActivity
-
-        # Try the generic Android content picker first.  This is intentionally
-        # permission-light: the user grants access only to the selected image.
-        intents = []
         try:
-            get_content = Intent(Intent.ACTION_GET_CONTENT)
-            get_content.addCategory(Intent.CATEGORY_OPENABLE)
-            get_content.setType("image/*")
-            get_content.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            get_content.addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
-            intents.append(get_content)
-        except Exception as exc:
-            print("Membuat GET_CONTENT intent gagal:", exc)
+            android_activity = PythonActivity.mActivity
+            if android_activity is None:
+                raise RuntimeError("PythonActivity.mActivity kosong")
 
-        try:
-            pick = Intent(Intent.ACTION_PICK)
-            pick.setType("image/*")
-            pick.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            intents.append(pick)
-        except Exception as exc:
-            print("Membuat ACTION_PICK intent gagal:", exc)
-
-        try:
-            open_doc = Intent(Intent.ACTION_OPEN_DOCUMENT)
-            open_doc.addCategory(Intent.CATEGORY_OPENABLE)
-            open_doc.setType("image/*")
-            open_doc.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            open_doc.addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
-            intents.append(open_doc)
-        except Exception as exc:
-            print("Membuat OPEN_DOCUMENT intent gagal:", exc)
-
-        last_exc = None
-        for picker_intent in intents:
+            # Android 13+ system Photo Picker. No storage permission is needed.
+            picker_intent = None
             try:
-                # Let Android choose the installed Gallery/Photos/File app.
-                chooser = Intent.createChooser(picker_intent, "Pilih Foto Produk")
-                chooser.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                android_activity.startActivityForResult(
-                    chooser, self._image_picker_request
-                )
-                self._set_product_image_status("Memilih foto...")
-                return
+                Build = autoclass("android.os.Build")
+                if int(Build.VERSION.SDK_INT) >= 33:
+                    picker_intent = Intent("android.provider.action.PICK_IMAGES")
+                    picker_intent.setType("image/*")
             except Exception as exc:
-                last_exc = exc
-                print("Android photo picker gagal:", exc)
+                print("Photo Picker API tidak tersedia:", repr(exc))
+
+            # Android 4.4+ document provider fallback.
+            if picker_intent is None:
+                try:
+                    picker_intent = Intent(Intent.ACTION_OPEN_DOCUMENT)
+                    picker_intent.addCategory(Intent.CATEGORY_OPENABLE)
+                    picker_intent.setType("image/*")
+                    picker_intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                except Exception as exc:
+                    print("ACTION_OPEN_DOCUMENT gagal dibuat:", repr(exc))
+                    picker_intent = Intent(Intent.ACTION_GET_CONTENT)
+                    picker_intent.addCategory(Intent.CATEGORY_OPENABLE)
+                    picker_intent.setType("image/*")
+                    picker_intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+
+            # Launch the actual Activity directly. Do NOT wrap it in a chooser
+            # and do NOT request persistable permission for GET_CONTENT.
+            android_activity.startActivityForResult(
+                picker_intent, self._image_picker_request
+            )
+            self._set_product_image_status("Memilih foto...")
+            return
+
+        except Exception as exc:
+            print("Android photo picker launch gagal:", repr(exc))
+            traceback.print_exc()
 
         try:
             if self._image_picker_bound:
@@ -2725,9 +2716,8 @@ class POSApp(App):
             pass
         self._image_picker_bound = False
         self._set_product_image_status(
-            "Galeri Android gagal dibuka. Coba pastikan aplikasi Foto/Galeri aktif."
+            "Galeri tidak dapat dibuka. Tekan + Foto Produk lagi."
         )
-        print("Semua metode Android photo picker gagal:", last_exc)
 
     def _on_product_image_result(self, request_code, result_code, intent):
         if request_code != getattr(self, "_image_picker_request", -1):
@@ -2814,7 +2804,7 @@ class POSApp(App):
         grid.clear_widgets()
         for p in self._v48_products(search):
             is_service = self._is_service_product(p)
-            stock_text = "Jasa â€¢ tanpa stok" if is_service else f"Stok {float(p['stock']):g} {p['unit']}"
+            stock_text = "Jasa Ã¢â‚¬Â¢ tanpa stok" if is_service else f"Stok {float(p['stock']):g} {p['unit']}"
             row = BoxLayout(size_hint_x=1, size_hint_y=None, height=dp(78), spacing=dp(8), padding=dp(8), width=max(1, grid.width))
             thumb_box = BoxLayout(size_hint_x=None, width=dp(58))
             image_path = p["image_path"] if "image_path" in p.keys() else ""
@@ -2826,7 +2816,7 @@ class POSApp(App):
             row.add_widget(thumb_box)
             info = Label(
                 text=f"{p['name']} | {p['barcode'] or '-'}\n"
-                     f"{('JASA' if is_service else 'BARANG')} â€¢ Jual {self.money(p['sell_price'])} | {stock_text}",
+                     f"{('JASA' if is_service else 'BARANG')} Ã¢â‚¬Â¢ Jual {self.money(p['sell_price'])} | {stock_text}",
                 halign="left", valign="middle", color=(.08,.10,.14,1), font_size="10sp"
             )
             info.bind(size=lambda w,v: setattr(w,"text_size",(max(1,v[0]),None)))
@@ -2869,7 +2859,7 @@ class POSApp(App):
         remove_btn = Button(text="Hapus Foto", background_normal="", background_color=(.96,.90,.90,1), color=(.72,.12,.12,1), bold=True)
         photo_actions.add_widget(pick_btn); photo_actions.add_widget(remove_btn)
         photo_wrap.add_widget(photo_actions)
-        status = Label(text="Foto tersimpan di perangkat." if self._product_image_path else "Opsional â€” tambahkan foto produk.",
+        status = Label(text="Foto tersimpan di perangkat." if self._product_image_path else "Opsional Ã¢â‚¬â€ tambahkan foto produk.",
                        size_hint_y=None, height=dp(18), font_size="9sp", color=(.35,.40,.48,1), halign="left", valign="middle")
         status.bind(size=lambda w,v: setattr(w,"text_size",v))
         photo_wrap.add_widget(status)
