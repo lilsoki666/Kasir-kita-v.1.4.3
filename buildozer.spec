@@ -38,6 +38,9 @@ fullscreen = 0
 # (list) Permissions
 android.permissions = INTERNET, READ_EXTERNAL_STORAGE, WRITE_EXTERNAL_STORAGE, READ_MEDIA_IMAGES
 
+# Kunci Build-Tools ke 30.0.3
+android.build_tools_version = 30.0.3
+
 # (int) Target Android API
 android.api = 33
 
