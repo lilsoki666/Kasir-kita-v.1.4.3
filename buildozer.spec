@@ -38,6 +38,9 @@ fullscreen = 0
 # (list) Permissions
 android.permissions = INTERNET, READ_EXTERNAL_STORAGE, WRITE_EXTERNAL_STORAGE, READ_MEDIA_IMAGES
 
+# Paksa Buildozer menggunakan SDK bawaan sistem/environment
+android.sdk_path = /usr/local/lib/android/sdk
+
 # Kunci Build-Tools ke 30.0.3
 android.build_tools_version = 30.0.3
 
