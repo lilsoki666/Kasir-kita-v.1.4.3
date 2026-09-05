@@ -33,33 +33,18 @@ jobs:
           libsdl2-ttf-dev libportmidi-dev libswscale-dev libavformat-dev \
           libavcodec-dev autoconf libtool pkg-config
 
-    - name: Setup Android SDK & Force AIDL
+    - name: Accept Android SDK Licenses & Install Build-Tools
       run: |
-        # Set variabel lingkungan Android SDK
-        export ANDROID_SDK_ROOT=$ANDROID_HOME
+        # Setujui semua lisensi SDK secara otomatis
+        yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --licenses || true
         
-        # Install Android Build-tools versi 30.0.3 & Platform API 33
+        # Install build-tools versi 30.0.3 & platform 33
         yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --sdk_root=$ANDROID_HOME "build-tools;30.0.3" "platforms;android-33" "platform-tools"
         
-        # Cari lokasi pasti file binary aidl
-        AIDL_PATH=$(find $ANDROID_HOME -name "aidl" -type f | head -n 1)
-        echo "LOKASI AIDL: $AIDL_PATH"
-        
-        # Salin dan buat Symlink AIDL secara paksa ke sistem PATH global
-        if [ -f "$AIDL_PATH" ]; then
-          sudo cp "$AIDL_PATH" /usr/bin/aidl
-          sudo cp "$AIDL_PATH" /usr/local/bin/aidl
-          sudo chmod +x /usr/bin/aidl
-          sudo chmod +x /usr/local/bin/aidl
-          echo "BERHASIL: AIDL disalin ke /usr/bin/aidl"
-        else
-          echo "GAGAL: AIDL tidak ditemukan!"
-          exit 1
-        fi
-        
-        # Tes keberadaan aidl di terminal
-        which aidl
-        aidl --version || true
+        # Buat symlink aidl ke sistem PATH global
+        AIDL_BIN=$(find $ANDROID_HOME -name "aidl" -type f | head -n 1)
+        sudo cp "$AIDL_BIN" /usr/bin/aidl
+        sudo chmod +x /usr/bin/aidl
 
     - name: Install Buildozer & Cython
       run: |
@@ -67,13 +52,19 @@ jobs:
         pip install "cython<3.0.0" buildozer
 
     - name: Build APK with Buildozer
+      env:
+        # Arahkan Buildozer menggunakan Android SDK bawaan runner (mencegah Buildozer download ulang)
+        ANDROID_SDK_ROOT: ${{ env.ANDROID_HOME }}
+        ANDROID_HOME: ${{ env.ANDROID_HOME }}
       run: |
         rm -rf .buildozer/android/platform/build-*
         
-        # Jalankan buildozer dengan PATH terdaftar
-        export PATH=$PATH:$ANDROID_HOME/build-tools/30.0.3
+        # Ekspor environment variable agar p4a membaca SDK & NDK lokal
+        export ANDROIDSDK=$ANDROID_HOME
+        export ANDROIDNDK=$ANDROID_HOME/ndk/25.2.9519653
+        
         buildozer -v android debug
-
+        
     - name: Upload APK Artifact
       uses: actions/upload-artifact@v4
       with:
