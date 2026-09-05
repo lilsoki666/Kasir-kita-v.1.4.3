@@ -33,15 +33,33 @@ jobs:
           libsdl2-ttf-dev libportmidi-dev libswscale-dev libavformat-dev \
           libavcodec-dev autoconf libtool pkg-config
 
-    - name: Install Android Build-Tools & Fix AIDL
+    - name: Setup Android SDK & Force AIDL
       run: |
-        # Install build-tools 30.0.3 yang dijamin memiliki aidl
-        yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --sdk_root=$ANDROID_HOME "build-tools;30.0.3" "platforms;android-33"
+        # Set variabel lingkungan Android SDK
+        export ANDROID_SDK_ROOT=$ANDROID_HOME
         
-        # Buat symlink global untuk aidl agar selalu terdeteksi oleh p4a
-        AIDL_BIN=$(find $ANDROID_HOME/build-tools -name "aidl" | tail -n 1)
-        sudo ln -sf $AIDL_BIN /usr/bin/aidl
-        sudo ln -sf $AIDL_BIN /usr/local/bin/aidl
+        # Install Android Build-tools versi 30.0.3 & Platform API 33
+        yes | $ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager --sdk_root=$ANDROID_HOME "build-tools;30.0.3" "platforms;android-33" "platform-tools"
+        
+        # Cari lokasi pasti file binary aidl
+        AIDL_PATH=$(find $ANDROID_HOME -name "aidl" -type f | head -n 1)
+        echo "LOKASI AIDL: $AIDL_PATH"
+        
+        # Salin dan buat Symlink AIDL secara paksa ke sistem PATH global
+        if [ -f "$AIDL_PATH" ]; then
+          sudo cp "$AIDL_PATH" /usr/bin/aidl
+          sudo cp "$AIDL_PATH" /usr/local/bin/aidl
+          sudo chmod +x /usr/bin/aidl
+          sudo chmod +x /usr/local/bin/aidl
+          echo "BERHASIL: AIDL disalin ke /usr/bin/aidl"
+        else
+          echo "GAGAL: AIDL tidak ditemukan!"
+          exit 1
+        fi
+        
+        # Tes keberadaan aidl di terminal
+        which aidl
+        aidl --version || true
 
     - name: Install Buildozer & Cython
       run: |
@@ -51,6 +69,9 @@ jobs:
     - name: Build APK with Buildozer
       run: |
         rm -rf .buildozer/android/platform/build-*
+        
+        # Jalankan buildozer dengan PATH terdaftar
+        export PATH=$PATH:$ANDROID_HOME/build-tools/30.0.3
         buildozer -v android debug
 
     - name: Upload APK Artifact
